@@ -1,0 +1,504 @@
+from django.contrib.auth import authenticate, login
+from django.shortcuts import render, redirect
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework import status
+from .models import User, Reminder, AddTask
+from .serializers import UserSerializer
+from rest_framework.parsers import JSONParser, FormParser
+from django.contrib.auth.decorators import login_required
+from datetime import datetime, timedelta
+from celery import shared_task
+from django_celery_beat.models import PeriodicTask, CrontabSchedule
+from datetime import datetime  # Use built-in datetime as a fallback
+import json
+from django.http import HttpResponse, JsonResponse
+import dateparser
+from django.http import JsonResponse
+from django.contrib.auth.decorators import login_required
+from django.views.decorators.csrf import csrf_exempt
+import traceback
+from dateparser import parse
+
+
+# Existing views unchanged
+class RegisterView(APIView):
+    def post(self, request):
+        serializer = UserSerializer(data=request.data)
+        if serializer.is_valid():
+            user = serializer.save()
+            # Log the user in automatically after registration
+            login(request, user)
+            # Redirect to landing page (home page) after successful registration
+            return redirect('landing')
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+class LoginView(APIView):
+    def post(self, request):
+        email = request.data.get('email')
+        password = request.data.get('password')
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return Response({'error': 'User not registered'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if not user.check_password(password):
+            return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if user.status != 'Active':
+            return Response({'error': 'Account is inactive'}, status=status.HTTP_400_BAD_REQUEST)
+
+        login(request, user)
+        return Response({'message': 'Login successful'}, status=status.HTTP_200_OK)
+    
+def Login_view(request):
+    if request.method == 'POST':
+        email = request.POST.get('email')
+        password = request.POST.get('password')
+
+        try:
+            user = User.objects.get(email=email)
+        except User.DoesNotExist:
+            return render(request, 'Login.html', {'error': 'User not registered'})
+
+        if not user.check_password(password):
+            return render(request, 'Login.html', {'error': 'Invalid credentials'})
+
+        if user.status != 'Active':
+            return render(request, 'Login.html', {'error': 'Account is inactive'})
+
+        login(request, user)
+        return redirect('landing')  # Redirect to landing page
+
+    return render(request, 'Login.html')
+
+def landing(request):
+    return render(request, 'landing.html')
+
+def Register_view(request):
+    return render(request, 'Register.html')
+
+def splashscreen(request):
+    return render(request, 'splashscreen.html')
+
+@login_required
+def create_reminder(request):
+    if request.method == "POST":
+        try:
+            data = json.loads(request.body)
+            task_description = data.get('task_description', '').strip()
+
+            if not task_description:
+                return JsonResponse({'error': 'Task description is required'}, status=400)
+
+            # Parse the natural language description
+            # For task: everything before time/date indicators or use full text
+            task = task_description
+            
+            # Try to parse date and time from the description
+            parsed_datetime = dateparser.parse(
+                task_description,
+                settings={
+                    'PREFER_DATES_FROM': 'future',
+                    'RETURN_AS_TIMEZONE_AWARE': False,
+                    'RELATIVE_BASE': datetime.datetime.now()
+                }
+            )
+            
+            # Extract task name by removing common time/date phrases
+            import re
+            # Remove common reminder phrases
+            task_clean = re.sub(r'\b(remind me to|reminder to|remind|task)\b', '', task_description, flags=re.IGNORECASE).strip()
+            # Remove date/time phrases
+            time_patterns = [
+                r'\b(at|on|in|by|tomorrow|today|tonight|this|next|every|daily)\s+\d+',
+                r'\b\d+\s*(am|pm|AM|PM|o\'clock)\b',
+                r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
+                r'\b(tomorrow|today|tonight)\b',
+                r'\b(morning|afternoon|evening|night)\b',
+                r'\bat\s+[\w\s:]+',
+                r'\bon\s+[\w\s,]+',
+            ]
+            for pattern in time_patterns:
+                task_clean = re.sub(pattern, '', task_clean, flags=re.IGNORECASE)
+            
+            task = task_clean.strip() or task_description
+            
+            # Set defaults if parsing failed
+            now = datetime.datetime.now()
+            if parsed_datetime:
+                task_date = parsed_datetime.date()
+                task_time = parsed_datetime.time()
+            else:
+                # Default: tomorrow at 9 AM
+                task_date = (now + datetime.timedelta(days=1)).date()
+                task_time = datetime.time(9, 0)
+            
+            # Determine reminder type (check for "daily" or "every day" keywords)
+            reminder_type = 'Daily' if any(word in task_description.lower() for word in ['daily', 'every day', 'everyday']) else 'Once'
+
+            # Create the reminder
+            reminder = Reminder.objects.create(
+                user=request.user,
+                task=task,
+                task_time=task_time,
+                task_date=task_date,
+                reminder_type=reminder_type
+            )
+
+            # Schedule the reminder
+            schedule_reminder(reminder)
+            
+            # Format date and time for display
+            formatted_date = task_date.strftime('%B %d, %Y')
+            formatted_time = task_time.strftime('%I:%M %p')
+
+            return JsonResponse({
+                'message': 'Reminder created successfully',
+                'reminder_id': reminder.id,
+                'task': task,
+                'formatted_date': formatted_date,
+                'formatted_time': formatted_time,
+                'reminder_type': reminder_type
+            })
+
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            return JsonResponse({'error': f"An error occurred: {str(e)}"}, status=500)
+
+    # Render the template for GET requests
+    return render(request, 'create_reminder.html')
+
+@shared_task
+def play_ringtone(reminder_id):
+    from playsound import playsound
+    reminder = Reminder.objects.get(id=reminder_id)
+    playsound('static/images/marco.mp3')  # Ensure this path is correct
+    reminder.is_completed = True
+    reminder.save()
+
+def schedule_reminder(reminder):
+    schedule, _ = CrontabSchedule.objects.get_or_create(
+        minute=reminder.task_time.minute,
+        hour=reminder.task_time.hour,
+        day_of_month=reminder.task_date.day,
+        month_of_year=reminder.task_date.month,
+    )
+    PeriodicTask.objects.create(
+        crontab=schedule,
+        name=f'reminder-{reminder.id}',
+        task='RemindHer_app.views.play_ringtone',
+        args=json.dumps([reminder.id]),
+        one_off=reminder.reminder_type.lower() == 'once'
+    )
+
+@login_required
+def snooze_reminder(request, reminder_id, minutes):
+    try:
+        reminder = Reminder.objects.get(id=reminder_id, user=request.user)
+        new_time = (datetime.combine(reminder.task_date, reminder.task_time) + timedelta(minutes=minutes)).time()
+        reminder.task_time = new_time
+        reminder.is_completed = False
+        reminder.save()
+        schedule_reminder(reminder)
+        return JsonResponse({'message': 'Reminder snoozed'})
+    except Reminder.DoesNotExist:
+        return JsonResponse({'error': 'Reminder not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+@login_required
+def cancel_reminder(request, reminder_id):
+    try:
+        reminder = Reminder.objects.get(id=reminder_id, user=request.user)
+        reminder.is_completed = True
+        reminder.save()
+        PeriodicTask.objects.filter(name=f'reminder-{reminder.id}').delete()
+        return JsonResponse({'message': 'Reminder canceled'})
+    except Reminder.DoesNotExist:
+        return JsonResponse({'error': 'Reminder not found'}, status=404)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+@login_required
+def check_reminders(request):
+    now = datetime.now()
+    reminders = Reminder.objects.filter(
+        user=request.user,
+        task_date=now.date(),
+        task_time__hour=now.hour,
+        task_time__minute=now.minute,
+        is_completed=False
+    )
+    if reminders.exists():
+        reminder = reminders.first()
+        return JsonResponse({
+            'reminder': {'id': reminder.id, 'task': reminder.task}
+        })
+    return JsonResponse({'reminder': None})
+
+# # New view for voice questionnaire@login_required
+
+@login_required
+@csrf_exempt
+def start_questionnaire(request):
+    print("START: Entering start_questionnaire")
+    print(f"Method: {request.method}")
+    
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
+    print(f"AJAX: {is_ajax}")
+    
+    if is_ajax and request.method == 'POST':
+        print(f"User ID: {request.user.id}")
+        try:
+            data = json.loads(request.body)
+            responses = data.get('responses', {})
+            print(f"Received: {responses}")
+            
+            task_name = responses.get("What is the task name?", "Unnamed Task")
+            task_time_str = responses.get("At what time should I remind you?", "10:00 PM")
+            task_date_str = responses.get("On which date should I remind you?", "today")
+            reminder_type = responses.get("Should I remind you once or daily?", "Once")
+            
+            task_name = "Unnamed Task" if task_name == "No response" else task_name
+            task_time_str = "10:00 PM" if task_time_str == "No response" else task_time_str
+            task_date_str = "today" if task_date_str == "No response" else task_date_str
+            reminder_type = "Once" if reminder_type == "No response" else reminder_type
+            
+            print(f"Processed: Name={task_name}, Time={task_time_str}, Date={task_date_str}, Type={reminder_type}")
+            
+            task_time = parse(task_time_str, settings={'TIMEZONE': 'UTC'}).time()
+            task_date = parse(task_date_str, settings={'PREFER_DATES_FROM': 'future', 'DATE_ORDER': 'DMY'}).date()
+            reminder_type = reminder_type.capitalize() if reminder_type.capitalize() in ['Once', 'Daily'] else 'Once'
+            
+            task = AddTask(
+                user=request.user,
+                task_name=task_name[:255],
+                task_time=task_time,
+                task_date=task_date,
+                reminder_type=reminder_type
+            )
+            task.save()
+            print(f"Saved: {task}")
+            
+            return JsonResponse({
+                'message': 'Task added successfully',
+                'task_id': task.id
+            }, status=200)
+        except Exception as e:
+            print(f"Error: {e}")
+            return JsonResponse({'message': 'Error adding task', 'error': str(e)}, status=200)
+    
+    print("Rendering questionnaire.html")
+    return render(request, 'questionnaire.html')
+
+
+# from django.contrib.auth import authenticate, login
+# from django.shortcuts import render, redirect
+# from rest_framework.response import Response
+# from rest_framework.views import APIView
+# from rest_framework import status
+# from .models import User, Reminder
+# from .serializers import UserSerializer
+# from rest_framework.parsers import JSONParser, FormParser
+# from django.contrib.auth.decorators import login_required
+# import speech_recognition as sr
+# import pyttsx3
+# import dateparser
+# from datetime import datetime, timedelta
+# from celery import shared_task
+# from django_celery_beat.models import PeriodicTask, CrontabSchedule
+# import json
+# from django.http import HttpResponse, JsonResponse
+# import threading
+
+# # Initialize speech recognition and TTS with a lock
+# listener = sr.Recognizer()
+# engine = pyttsx3.init()
+# voices = engine.getProperty('voices')
+# engine.setProperty('voice', voices[1].id)
+# speech_lock = threading.Lock()  # Lock to synchronize speech
+
+# listener.dynamic_energy_threshold = True
+# listener.energy_threshold = 300
+# listener.pause_threshold = 0.8
+# listener.phrase_time_limit = 8
+# listener.non_speaking_duration = 0.5
+
+# def talk(text):
+#     with speech_lock:  # Ensure only one speech at a time
+#         engine.say(text)
+#         engine.runAndWait()
+
+# def take_command(prompt, expected_type="text"):
+#     while True:
+#         talk(prompt)
+#         print(prompt)
+#         try:
+#             with sr.Microphone() as source:
+#                 listener.adjust_for_ambient_noise(source, duration=2)
+#                 print("Listening...")
+#                 voice = listener.listen(source)
+#                 command = listener.recognize_google(voice, language='en-US').lower()
+#                 print(f"User said: {command}")
+
+#                 if expected_type == "time":
+#                     parsed = dateparser.parse(command, settings={'TIMEZONE': 'UTC'})
+#                     return parsed.time() if parsed else None
+#                 elif expected_type == "date":
+#                     parsed = dateparser.parse(command, settings={'PREFER_DATES_FROM': 'future'})
+#                     return parsed.date() if parsed else None
+#                 elif expected_type == "text":
+#                     return command
+#         except sr.UnknownValueError:
+#             talk("Sorry, I didn't catch that. Please repeat.")
+#         except Exception as e:
+#             print(f"Error: {e}")
+#         talk("Please try again.")
+
+# class RegisterView(APIView):
+#     def post(self, request):
+#         serializer = UserSerializer(data=request.data)
+#         if serializer.is_valid():
+#             serializer.save()
+#             return Response({'message': 'User registered successfully'}, status=status.HTTP_201_CREATED)
+#         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+# class LoginView(APIView):
+#     def post(self, request):
+#         email = request.data.get('email')
+#         password = request.data.get('password')
+
+#         try:
+#             user = User.objects.get(email=email)
+#         except User.DoesNotExist:
+#             return Response({'error': 'User not registered'}, status=status.HTTP_400_BAD_REQUEST)
+
+#         if not user.check_password(password):
+#             return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
+
+#         if user.status != 'Active':
+#             return Response({'error': 'Account is inactive'}, status=status.HTTP_400_BAD_REQUEST)
+
+#         login(request, user)
+#         return Response({'message': 'Login successful'}, status=status.HTTP_200_OK)
+
+# def Login_view(request):
+#     return render(request, 'Login.html')
+
+# def Register_view(request):
+#     return render(request, 'Register.html')
+
+# def splashscreen(request):
+#     return render(request, 'splashscreen.html')
+
+# @login_required
+# def create_reminder(request):
+#     if request.method == "POST":
+#         task = request.POST.get('task')
+#         task_time_str = request.POST.get('task_time')
+#         task_date_str = request.POST.get('task_date')
+#         reminder_type = request.POST.get('reminder_type')
+
+#         try:
+#             task_time = datetime.strptime(task_time_str, '%H:%M:%S').time()
+#         except ValueError:
+#             task_time = dateparser.parse(task_time_str).time() if task_time_str else None
+
+#         task_date = datetime.strptime(task_date_str, '%Y-%m-%d').date() if task_date_str else None
+
+#         if not task_time or not task_date:
+#             return render(request, 'create_reminder.html', {
+#                 'error': 'Invalid time or date format. Please try again.',
+#                 'task': task, 'task_time': task_time_str, 'task_date': task_date_str, 'reminder_type': reminder_type
+#             })
+
+#         reminder = Reminder.objects.create(
+#             user=request.user,
+#             task=task,
+#             task_time=task_time,
+#             task_date=task_date,
+#             reminder_type=reminder_type
+#         )
+
+#         schedule_reminder(reminder)
+#         return JsonResponse({'message': 'Reminder set successfully', 'reminder_id': reminder.id})
+
+#     task = take_command("Hey, what's the task?", "text")
+#     task_time = take_command("At what time should I remind you?", "time")
+#     task_date = take_command("On which date should I remind you?", "date")
+#     reminder_type = take_command("Should I remind you once or daily?", "text")
+
+#     confirmation = f"Reminder set for '{task}' on {task_date.strftime('%B %d')} at {task_time.strftime('%I:%M %p')}, {reminder_type}."
+#     talk(confirmation)
+
+#     task_time_str = task_time.strftime('%H:%M:%S')
+#     task_date_str = task_date.strftime('%Y-%m-%d')
+
+#     return render(request, 'create_reminder.html', {
+#         'task': task, 'task_time': task_time_str, 'task_date': task_date_str, 'reminder_type': reminder_type
+#     })
+
+# @shared_task
+# def play_ringtone(reminder_id):
+#     from playsound import playsound
+#     reminder = Reminder.objects.get(id=reminder_id)
+#     playsound('static\images\marco.mp3')  # Replace with your ringtone file path
+#     # Note: Popup logic will be handled client-side or via a desktop client
+#     reminder.is_completed = True
+#     reminder.save()
+
+# def schedule_reminder(reminder):
+#     schedule, _ = CrontabSchedule.objects.get_or_create(
+#         minute=reminder.task_time.minute,
+#         hour=reminder.task_time.hour,
+#         day_of_month=reminder.task_date.day,
+#         month_of_year=reminder.task_date.month,
+#     )
+#     PeriodicTask.objects.create(
+#         crontab=schedule,
+#         name=f'reminder-{reminder.id}',
+#         task='RemindHer_app.views.play_ringtone',
+#         args=json.dumps([reminder.id]),
+#         one_off=reminder.reminder_type == 'Once'
+#     )
+
+# @login_required
+# def snooze_reminder(request, reminder_id, minutes):
+#     reminder = Reminder.objects.get(id=reminder_id, user=request.user)
+#     new_time = (datetime.combine(reminder.task_date, reminder.task_time) + timedelta(minutes=minutes)).time()
+#     reminder.task_time = new_time
+#     reminder.is_completed = False
+#     reminder.save()
+#     schedule_reminder(reminder)
+#     return JsonResponse({'message': 'Reminder snoozed'})
+
+# @login_required
+# def cancel_reminder(request, reminder_id):
+#     reminder = Reminder.objects.get(id=reminder_id, user=request.user)
+#     reminder.is_completed = True
+#     reminder.save()
+#     PeriodicTask.objects.filter(name=f'reminder-{reminder.id}').delete()
+#     return JsonResponse({'message': 'Reminder canceled'})
+
+# @login_required
+# def check_reminders(request):
+#     now = datetime.now()
+#     reminders = Reminder.objects.filter(
+#         user=request.user,
+#         task_date=now.date(),
+#         task_time__hour=now.hour,
+#         task_time__minute=now.minute,
+#         is_completed=False
+#     )
+#     if reminders.exists():
+#         reminder = reminders.first()
+#         return JsonResponse({
+#             'reminder': {'id': reminder.id, 'task': reminder.task}
+#         })
+#     return JsonResponse({'reminder': None})
+

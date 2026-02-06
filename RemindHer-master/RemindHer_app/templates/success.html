@@ -1,0 +1,35 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reminder Set - RemindHer</title>
+    <link rel="stylesheet" href="{% static 'css/success.css' %}">
+    <script>
+        function snooze(minutes) {
+            fetch('/snooze/{{ reminder.id }}/' + minutes, { method: 'POST' })
+                .then(() => window.close());
+        }
+        function cancel() {
+            fetch('/cancel/{{ reminder.id }}/', { method: 'POST' })
+                .then(() => window.close());
+        }
+    </script>
+</head>
+
+<body>
+    <div class="container">
+        <div class="reminder-icon">⏰</div>
+        <h1>Reminder Alert</h1>
+        <div class="reminder-task">{{ reminder.task }}</div>
+        <div class="button-group">
+            <button class="snooze-btn" onclick="snooze(5)">Snooze 5 min</button>
+            <button class="snooze-btn" onclick="snooze(10)">Snooze 10 min</button>
+            <button class="cancel-btn" onclick="cancel()">Dismiss</button>
+        </div>
+    </div>
+</body>
+
+</html>

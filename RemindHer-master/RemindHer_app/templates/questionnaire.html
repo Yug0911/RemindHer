@@ -1,0 +1,169 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Questionnaire</title>
+    <link rel="stylesheet" href="{% static 'css/questionnaire.css' %}">
+</head>
+
+<body>
+    <div>
+        <h1>Voice Questionnaire</h1>
+        <button onclick="startQuestionnaire()">Start Questionnaire</button>
+        <div id="status">Waiting...</div>
+        <div id="chat-content"></div>
+    </div>
+
+    <script>
+        const questionnaireUrl = "{% url 'start_questionnaire' %}";
+
+        function getCookie(name) {
+            let cookieValue = null;
+            if (document.cookie) {
+                document.cookie.split(';').forEach(cookie => {
+                    const [key, value] = cookie.trim().split('=');
+                    if (key === name) cookieValue = decodeURIComponent(value);
+                });
+            }
+            return cookieValue;
+        }
+
+        function speak(text) {
+            return new Promise(resolve => {
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.onend = resolve;
+                window.speechSynthesis.speak(utterance);
+            });
+        }
+
+        async function getSpeechResponse(question) {
+            const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.lang = 'en-US';  // Adjust if needed (e.g., 'en-IN' for Indian English)
+            recognition.interimResults = true;  // Catch every word as it comes
+            recognition.maxAlternatives = 1;
+            recognition.continuous = false;
+
+            return new Promise((resolve) => {
+                console.log(`[START] Listening for: ${question}`);
+                let gotResponse = false;
+                let finalTranscript = '';
+
+                recognition.onstart = () => console.log("[EVENT] Recognition started");
+                recognition.onaudiostart = () => console.log("[EVENT] Audio detected");
+                recognition.onsoundstart = () => console.log("[EVENT] Sound detected");
+                recognition.onspeechstart = () => console.log("[EVENT] Speech detected");
+                recognition.onresult = (event) => {
+                    let interimTranscript = '';
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                        const transcript = event.results[i][0].transcript.trim();
+                        if (event.results[i].isFinal) {
+                            finalTranscript = transcript;
+                            console.log(`[RESULT] Final: ${finalTranscript}`);
+                        } else {
+                            interimTranscript = transcript;
+                            console.log(`[RESULT] Interim: ${interimTranscript}`);
+                        }
+                    }
+                    if (finalTranscript) {
+                        gotResponse = true;
+                        recognition.stop();
+                        console.log("[STOP] Got final response");
+                        resolve(finalTranscript);
+                    }
+                };
+                recognition.onerror = (event) => {
+                    console.error(`[ERROR] ${event.error}`);
+                    recognition.stop();
+                    if (!gotResponse) resolve("No response");
+                };
+                recognition.onend = () => {
+                    console.log("[END] Recognition stopped");
+                    if (!gotResponse) {
+                        console.log("[FAIL] No speech recognized");
+                        resolve("No response");
+                    }
+                };
+
+                try {
+                    console.log("[TRY] Starting recognition");
+                    recognition.start();
+                    setTimeout(() => {
+                        if (!gotResponse) {
+                            recognition.stop();
+                            console.log("[TIMEOUT] 30 seconds up");
+                        }
+                    }, 30000);  // 30 seconds to speak
+                } catch (err) {
+                    console.error("[EXCEPTION] Start failed:", err);
+                    resolve("No response");
+                }
+            });
+        }
+
+        async function startQuestionnaire() {
+            console.log("[CLICK] Start button pressed");
+            const status = document.getElementById('status');
+            const chatContent = document.getElementById('chat-content');
+            status.textContent = 'Starting...';
+            chatContent.innerHTML = '';
+
+            const questions = [
+                "What is the task name?",
+                "At what time should I remind you?",
+                "On which date should I remind you?",
+                "Should I remind you once or daily?"
+            ];
+            const responses = {};
+
+            for (const question of questions) {
+                await speak(question);
+                const aiMsg = document.createElement('div');
+                aiMsg.className = 'message ai';
+                aiMsg.textContent = `AI: ${question}`;
+                chatContent.appendChild(aiMsg);
+
+                status.textContent = `Listening for: ${question} (30s to speak)`;
+                const response = await getSpeechResponse(question);
+                const userMsg = document.createElement('div');
+                userMsg.className = 'message user';
+                userMsg.textContent = `You: ${response}`;
+                chatContent.appendChild(userMsg);
+                responses[question] = response;
+
+                chatContent.scrollTop = chatContent.scrollHeight;
+                await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            status.textContent = 'Sending...';
+            console.log("[SEND] Responses:", responses);
+            fetch(questionnaireUrl, {
+                method: 'POST',
+                headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCookie('csrftoken')
+                },
+                body: JSON.stringify({ responses })
+            })
+                .then(response => {
+                    if (!response.ok) throw new Error(`HTTP error: ${response.status}`);
+                    return response.json();
+                })
+                .then(data => {
+                    status.textContent = data.message;
+                    if (data.task_id) speak("Task added successfully!");
+                    else speak("Failed to add task.");
+                })
+                .catch(error => {
+                    console.error('[FETCH ERROR]', error);
+                    status.textContent = 'Error sending responses';
+                    speak("Error occurred.");
+                });
+        }
+    </script>
+</body>
+
+</html>
