@@ -1,0 +1,68 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Home - RemindHer</title>
+    <link rel="stylesheet" href="{% static 'css/landing.css' %}">
+</head>
+
+<body>
+    <div class="container">
+        <div class="dashboard-box">
+            <div class="header">
+                <h1>RemindHer</h1>
+                <p>Your Smart Reminder Assistant</p>
+            </div>
+
+            <div class="user-greeting">
+                <h2>Welcome Back! 👋</h2>
+                <p>{{ request.user.name }}</p>
+            </div>
+
+            <div class="actions-grid">
+                <a href="{% url 'create_reminder' %}" class="action-button">
+                    <span class="icon">📝</span>
+                    <span class="label">Create Reminder</span>
+                </a>
+                <a href="{% url 'voice_assistant' %}" class="action-button">
+                    <span class="icon">🎤</span>
+                    <span class="label">Voice Assistant</span>
+                </a>
+                <a href="{% url 'start_questionnaire' %}" class="action-button">
+                    <span class="icon">📝</span>
+                    <span class="label">Voice Questionnaire</span>
+                </a>
+                <a href="{% url 'inventory_list' %}" class="action-button">
+                    <span class="icon">🗄️</span>
+                    <span class="label">Inventory</span>
+                </a>
+                <a href="{% url 'recipe_list' %}" class="action-button">
+                    <span class="icon">🍳</span>
+                    <span class="label">Recipes</span>
+                </a>
+                <a href="{% url 'view_reminders' %}" class="action-button">
+                    <span class="icon">📋</span>
+                    <span class="label">View Reminders</span>
+                </a>
+                <a href="{% url 'grocery_list' %}" class="action-button">
+                    <span class="icon">🛒</span>
+                    <span class="label">Grocery List</span>
+                </a>
+            </div>
+
+            <div class="divider">
+                <span>Quick Actions</span>
+            </div>
+
+            <form method="POST" action="{% url 'login' %}">
+                {% csrf_token %}
+                <button type="submit" class="secondary-button">Logout</button>
+            </form>
+        </div>
+    </div>
+</body>
+
+</html>

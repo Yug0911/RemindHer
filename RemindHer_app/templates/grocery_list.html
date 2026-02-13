@@ -1,0 +1,329 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Grocery List - RemindHer</title>
+    <link rel="stylesheet" href="{% static 'css/landing.css' %}">
+    <style>
+        body {
+            background: linear-gradient(135deg, #0a0a0a, #1a1a2e);
+            color: #ffffff;
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #00d4ff;
+            font-size: 2.5em;
+            text-shadow: 0 0 10px #00d4ff;
+        }
+        .add-item-form {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid #00d4ff;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .form-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+        .form-group input {
+            flex: 1;
+            padding: 10px;
+            border: 1px solid #00d4ff;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+        }
+        .form-group input::placeholder {
+            color: #ccc;
+        }
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+        .btn-primary {
+            background: #00d4ff;
+            color: #000;
+        }
+        .btn-primary:hover {
+            background: #0099cc;
+        }
+        .grocery-items {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid #00d4ff;
+            border-radius: 10px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .grocery-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+            transition: background 0.3s ease;
+        }
+        .grocery-item:last-child {
+            border-bottom: none;
+        }
+        .grocery-item.completed {
+            opacity: 0.6;
+            text-decoration: line-through;
+        }
+        .item-checkbox {
+            margin-right: 15px;
+            transform: scale(1.2);
+        }
+        .item-name {
+            flex: 1;
+            font-size: 1.1em;
+        }
+        .item-quantity {
+            color: #00d4ff;
+            font-weight: bold;
+            margin-right: 15px;
+        }
+        .item-actions {
+            display: flex;
+            gap: 10px;
+        }
+        .btn-small {
+            padding: 5px 10px;
+            font-size: 0.9em;
+        }
+        .btn-delete {
+            background: #ff6b6b;
+            color: #fff;
+        }
+        .btn-delete:hover {
+            background: #cc5555;
+        }
+        .suggestions {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid #00d4ff;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+            backdrop-filter: blur(10px);
+        }
+        .suggestion-item {
+            display: inline-block;
+            background: #ff6b6b;
+            color: #fff;
+            padding: 5px 10px;
+            border-radius: 15px;
+            margin: 5px;
+            cursor: pointer;
+            transition: background 0.3s ease;
+        }
+        .suggestion-item:hover {
+            background: #cc5555;
+        }
+        .actions {
+            text-align: center;
+            margin-top: 20px;
+        }
+        .empty-list {
+            text-align: center;
+            color: #ccc;
+            font-style: italic;
+            padding: 40px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🛒 Smart Grocery List</h1>
+            <p>Manage your shopping list with smart suggestions</p>
+        </div>
+
+        <div class="suggestions">
+            <h3>💡 Suggested Items (Low Stock)</h3>
+            <div id="suggestionsContainer">
+                <!-- Suggestions will be loaded here -->
+            </div>
+        </div>
+
+        <div class="add-item-form">
+            <h3>Add Item</h3>
+            <div class="form-group">
+                <input type="text" id="itemName" placeholder="Item name" required>
+                <input type="number" id="itemQuantity" placeholder="Quantity" min="1" value="1">
+                <button class="btn btn-primary" onclick="addItem()">Add Item</button>
+            </div>
+        </div>
+
+        <div class="grocery-items">
+            <h3>Your Grocery List</h3>
+            <div id="groceryItems">
+                {% for item in grocery_list.items %}
+                <div class="grocery-item {% if item.completed %}completed{% endif %}" data-index="{{ forloop.counter0 }}">
+                    <input type="checkbox" class="item-checkbox"
+                           {% if item.completed %}checked{% endif %}
+                           onchange="toggleItem({{ forloop.counter0 }})">
+                    <span class="item-name">{{ item.name }}</span>
+                    <span class="item-quantity">{{ item.quantity }}</span>
+                    <div class="item-actions">
+                        <button class="btn btn-small btn-delete" onclick="deleteItem({{ forloop.counter0 }})">Delete</button>
+                    </div>
+                </div>
+                {% empty %}
+                <div class="empty-list">
+                    Your grocery list is empty. Add some items above!
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
+        <div class="actions">
+            <button class="btn btn-primary" onclick="completeList()">Complete List</button>
+            <a href="{% url 'landing' %}" class="btn btn-secondary" style="margin-left: 10px;">Back to Dashboard</a>
+        </div>
+    </div>
+
+    <script>
+        // Load suggestions on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadSuggestions();
+        });
+
+        function loadSuggestions() {
+            fetch('/grocery/suggestions/', {
+                method: 'GET',
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => response.json())
+            .then(data => {
+                const container = document.getElementById('suggestionsContainer');
+                if (data.suggestions && data.suggestions.length > 0) {
+                    container.innerHTML = data.suggestions.map(item =>
+                        `<span class="suggestion-item" onclick="addSuggestion('${item}')">${item}</span>`
+                    ).join('');
+                } else {
+                    container.innerHTML = '<p>No suggestions available</p>';
+                }
+            });
+        }
+
+        function addSuggestion(itemName) {
+            document.getElementById('itemName').value = itemName;
+            document.getElementById('itemQuantity').value = 1;
+            addItem();
+        }
+
+        function addItem() {
+            const name = document.getElementById('itemName').value.trim();
+            const quantity = parseInt(document.getElementById('itemQuantity').value) || 1;
+
+            if (!name) {
+                alert('Please enter an item name');
+                return;
+            }
+
+            fetch('/grocery/add/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({
+                    name: name,
+                    quantity: quantity
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.message) {
+                    alert(data.message);
+                    location.reload();
+                } else if (data.error) {
+                    alert(data.error);
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('An error occurred');
+            });
+        }
+
+        function toggleItem(index) {
+            const checkbox = event.target;
+            const completed = checkbox.checked;
+
+            fetch(`/grocery/update/${index}/`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': '{{ csrf_token }}'
+                },
+                body: JSON.stringify({ completed: completed })
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.message) {
+                    const item = checkbox.closest('.grocery-item');
+                    if (completed) {
+                        item.classList.add('completed');
+                    } else {
+                        item.classList.remove('completed');
+                    }
+                }
+            });
+        }
+
+        function deleteItem(index) {
+            if (confirm('Are you sure you want to delete this item?')) {
+                fetch(`/grocery/delete/${index}/`, {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    location.reload();
+                });
+            }
+        }
+
+        function completeList() {
+            if (confirm('Mark this grocery list as completed?')) {
+                fetch('/grocery/complete/', {
+                    method: 'POST',
+                    headers: {
+                        'X-CSRFToken': '{{ csrf_token }}'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    alert(data.message);
+                    location.reload();
+                });
+            }
+        }
+    </script>
+</body>
+</html>

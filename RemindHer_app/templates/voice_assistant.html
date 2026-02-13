@@ -1,0 +1,246 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Assistant - RemindHer</title>
+    <link rel="stylesheet" href="{% static 'css/landing.css' %}">
+    <style>
+        .voice-container {
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+            text-align: center;
+        }
+        .voice-button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            border-radius: 50%;
+            width: 150px;
+            height: 150px;
+            font-size: 60px;
+            color: white;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+            transition: all 0.3s ease;
+            margin: 30px 0;
+        }
+        .voice-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+        }
+        .voice-button.listening {
+            background: linear-gradient(135deg, #ff6b6b 0%, #ee5a24 100%);
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.05); }
+            100% { transform: scale(1); }
+        }
+        .status {
+            font-size: 18px;
+            color: #666;
+            margin: 20px 0;
+            min-height: 24px;
+        }
+        .transcript {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            min-height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            color: #333;
+        }
+        .examples {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .examples h3 {
+            color: #333;
+            margin-bottom: 15px;
+        }
+        .examples ul {
+            text-align: left;
+            color: #666;
+            line-height: 1.6;
+        }
+        .examples li {
+            margin: 5px 0;
+        }
+        .back-button {
+            display: inline-block;
+            background: #6c757d;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .back-button:hover {
+            background: #5a6268;
+        }
+    </style>
+</head>
+<body>
+    {% csrf_token %}
+    <div class="voice-container">
+        <a href="{% url 'landing' %}" class="back-button">← Back to Home</a>
+        <h1>Voice Assistant</h1>
+        <p>Speak naturally to create reminders</p>
+
+        <button id="voiceButton" class="voice-button" onclick="toggleListening()">
+            🎤
+        </button>
+
+        <div id="status" class="status">Click the microphone to start speaking</div>
+        <div id="transcript" class="transcript">Your speech will appear here...</div>
+
+        <div class="examples">
+            <h3>Try saying things like:</h3>
+            <ul>
+                <li>"Remind me to buy groceries at 5 PM tomorrow"</li>
+                <li>"Set a daily reminder for taking medicine at 8 AM"</li>
+                <li>"Remind me to call mom at 3 PM today"</li>
+                <li>"Set reminder for meeting at 2 PM next Monday"</li>
+                <li>"Remind me to water plants every day at 7 AM"</li>
+            </ul>
+            <p><strong>Tip:</strong> Try simple commands like "buy groceries at 5 PM tomorrow" or "call mom at 3 PM"</p>
+            <p><strong>Note:</strong> The system will always create a reminder, even if it doesn't perfectly understand!</p>
+        </div>
+    </div>
+
+    <script>
+        let isListening = false;
+        let recognition = null;
+
+        function getCsrfToken() {
+            return document.querySelector('[name=csrfmiddlewaretoken]')?.value ||
+                   document.cookie.split(';').find(c => c.trim().startsWith('csrftoken='))?.split('=')[1];
+        }
+
+        function toggleListening() {
+            if (isListening) {
+                stopListening();
+            } else {
+                startListening();
+            }
+        }
+
+        function startListening() {
+            if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+                alert('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+                return;
+            }
+
+            recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+            recognition.lang = 'en-IN';
+            recognition.continuous = false;
+            recognition.interimResults = false;
+            recognition.maxAlternatives = 1;
+
+            recognition.onstart = function() {
+                isListening = true;
+                document.getElementById('voiceButton').classList.add('listening');
+                document.getElementById('status').textContent = 'Listening... Speak now!';
+                document.getElementById('transcript').textContent = '🎤 Listening...';
+            };
+
+            recognition.onresult = function(event) {
+                const transcript = event.results[0][0].transcript;
+                document.getElementById('transcript').textContent = transcript;
+                document.getElementById('status').textContent = 'Processing your request...';
+
+                // Send to server for processing
+                processVoiceCommand(transcript);
+            };
+
+            recognition.onerror = function(event) {
+                console.error('Speech recognition error:', event.error);
+                let errorMessage = 'Speech recognition error occurred.';
+                switch(event.error) {
+                    case 'not-allowed':
+                        errorMessage = 'Microphone access denied. Please allow microphone permissions.';
+                        break;
+                    case 'no-speech':
+                        errorMessage = 'No speech detected. Please try again.';
+                        break;
+                    case 'network':
+                        errorMessage = 'Network error. Check your connection.';
+                        break;
+                }
+                document.getElementById('status').textContent = errorMessage;
+                document.getElementById('transcript').textContent = 'Please try again...';
+                stopListening();
+            };
+
+            recognition.onend = function() {
+                stopListening();
+            };
+
+            try {
+                recognition.start();
+            } catch (error) {
+                console.error('Error starting recognition:', error);
+                document.getElementById('status').textContent = 'Error starting voice recognition.';
+                stopListening();
+            }
+        }
+
+        function stopListening() {
+            isListening = false;
+            if (recognition) {
+                recognition.stop();
+            }
+            document.getElementById('voiceButton').classList.remove('listening');
+            if (!document.getElementById('status').textContent.includes('error') &&
+                !document.getElementById('status').textContent.includes('Processing')) {
+                document.getElementById('status').textContent = 'Click the microphone to start speaking';
+            }
+        }
+
+        function processVoiceCommand(transcript) {
+            fetch('{% url "process_voice_command" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken(),
+                    'X-Requested-With': 'XMLHttpRequest'
+                },
+                body: JSON.stringify({ command: transcript })
+            })
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                if (data.success) {
+                    document.getElementById('status').textContent = '✅ ' + data.message;
+                    document.getElementById('transcript').textContent = 'Reminder created successfully!';
+                    // Reset after 3 seconds
+                    setTimeout(() => {
+                        document.getElementById('status').textContent = 'Click the microphone to start speaking';
+                        document.getElementById('transcript').textContent = 'Your speech will appear here...';
+                    }, 3000);
+                } else {
+                    document.getElementById('status').textContent = '❌ ' + (data.error || 'Error creating reminder');
+                }
+            })
+            .catch(error => {
+                console.error('Error processing voice command:', error);
+                document.getElementById('status').textContent = '❌ Error: ' + error.message;
+            });
+        }
+    </script>
+</body>
+</html>

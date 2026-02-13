@@ -1,0 +1,93 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>View Reminders - RemindHer</title>
+    <link rel="stylesheet" href="{% static 'css/landing.css' %}">
+    <style>
+        .reminders-container {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .reminder-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 10px 0;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            border-left: 5px solid #007bff;
+        }
+        .reminder-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .reminder-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+        .reminder-type {
+            background: #e9ecef;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            color: #495057;
+        }
+        .reminder-time {
+            color: #007bff;
+            font-weight: 500;
+        }
+        .reminder-date {
+            color: #6c757d;
+            font-size: 14px;
+        }
+        .no-reminders {
+            text-align: center;
+            color: #6c757d;
+            font-size: 18px;
+            margin: 50px 0;
+        }
+        .back-button {
+            display: inline-block;
+            background: #6c757d;
+            color: white;
+            padding: 10px 20px;
+            text-decoration: none;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        .back-button:hover {
+            background: #5a6268;
+        }
+    </style>
+</head>
+<body>
+    <div class="reminders-container">
+        <a href="{% url 'landing' %}" class="back-button">← Back to Home</a>
+        <h1>Your Reminders</h1>
+
+        {% if reminders %}
+            {% for reminder in reminders %}
+                <div class="reminder-card">
+                    <div class="reminder-header">
+                        <div class="reminder-title">{{ reminder.task }}</div>
+                        <div class="reminder-type">{{ reminder.reminder_type }}</div>
+                    </div>
+                    <div class="reminder-time">{{ reminder.task_time|time:"g:i A" }}</div>
+                    <div class="reminder-date">{{ reminder.task_date|date:"l, F j, Y" }}</div>
+                </div>
+            {% endfor %}
+        {% else %}
+            <div class="no-reminders">
+                <p>No reminders found.</p>
+                <p>Create some reminders using voice commands or the create reminder form!</p>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>

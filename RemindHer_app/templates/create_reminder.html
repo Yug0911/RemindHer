@@ -1,0 +1,237 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create Reminder - RemindHer</title>
+    <link rel="stylesheet" href="{% static 'css/create_reminder.css' %}">
+</head>
+
+<body>
+    <div class="container">
+        <h2>Create Voice Reminder</h2>
+        <p style="color: #4A5568; margin-bottom: 2rem;">Click the button and describe your reminder in natural language
+        </p>
+
+        <button id="recordButton" class="record-button">
+            <span id="buttonIcon">🎤</span>
+            <span id="buttonText">Start Recording</span>
+        </button>
+
+        <div id="recordingIndicator" class="recording-indicator" style="display: none;">
+            <div class="pulse"></div>
+            <span>Listening...</span>
+        </div>
+
+        <div id="transcription" class="transcription-box" style="display: none;">
+            <h3>What I heard:</h3>
+            <p id="transcriptText" class="transcript-text"></p>
+        </div>
+
+        <div id="parsedDetails" class="parsed-details" style="display: none;">
+            <h3>Reminder Details:</h3>
+            <div class="detail-item">
+                <strong>Task:</strong> <span id="parsedTask"></span>
+            </div>
+            <div class="detail-item">
+                <strong>Date:</strong> <span id="parsedDate"></span>
+            </div>
+            <div class="detail-item">
+                <strong>Time:</strong> <span id="parsedTime"></span>
+            </div>
+            <div class="detail-item">
+                <strong>Type:</strong> <span id="parsedType"></span>
+            </div>
+        </div>
+
+        <div id="status" class="status-message"></div>
+
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+
+        <a href="{% url 'landing' %}" class="back-button">← Back to Home</a>
+    </div>
+
+    <script>
+        const recognition = new (window.SpeechRecognition || window.webkitSpeechRecognition)();
+        recognition.lang = 'en-US';
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.maxAlternatives = 1;
+
+        let isRecording = false;
+        let finalTranscript = '';
+        let silenceTimeout = null;
+        const SILENCE_DURATION = 15000; // 15 seconds
+
+        const recordButton = document.getElementById('recordButton');
+        const buttonIcon = document.getElementById('buttonIcon');
+        const buttonText = document.getElementById('buttonText');
+        const recordingIndicator = document.getElementById('recordingIndicator');
+        const transcriptionBox = document.getElementById('transcription');
+        const transcriptText = document.getElementById('transcriptText');
+        const statusDiv = document.getElementById('status');
+        const parsedDetailsDiv = document.getElementById('parsedDetails');
+
+        function getCsrfToken() {
+            return document.querySelector('[name=csrfmiddlewaretoken]')?.value || '{{ csrf_token }}';
+        }
+
+        recordButton.addEventListener('click', () => {
+            if (!isRecording) {
+                startRecording();
+            } else {
+                stopRecording();
+            }
+        });
+
+        function startRecording() {
+            isRecording = true;
+            finalTranscript = '';
+
+            // Update UI
+            buttonIcon.textContent = '⏹️';
+            buttonText.textContent = 'Stop Recording';
+            recordButton.classList.add('recording');
+            recordingIndicator.style.display = 'flex';
+            transcriptionBox.style.display = 'block';
+            transcriptText.textContent = '';
+            parsedDetailsDiv.style.display = 'none';
+            statusDiv.textContent = '';
+            statusDiv.className = 'status-message';
+
+            // Start recognition
+            try {
+                recognition.start();
+            } catch (e) {
+                console.error('Recognition start error:', e);
+            }
+        }
+
+        function stopRecording() {
+            isRecording = false;
+
+            // Update UI
+            buttonIcon.textContent = '🎤';
+            buttonText.textContent = 'Start Recording';
+            recordButton.classList.remove('recording');
+            recordingIndicator.style.display = 'none';
+
+            // Stop recognition
+            recognition.stop();
+
+            // Clear silence timeout
+            if (silenceTimeout) {
+                clearTimeout(silenceTimeout);
+                silenceTimeout = null;
+            }
+
+            // Process the transcript
+            if (finalTranscript.trim()) {
+                processTranscript(finalTranscript);
+            } else {
+                statusDiv.textContent = 'No speech detected. Please try again.';
+                statusDiv.className = 'status-message error';
+            }
+        }
+
+        recognition.onresult = (event) => {
+            let interimTranscript = '';
+
+            for (let i = event.resultIndex; i < event.results.length; i++) {
+                const transcript = event.results[i][0].transcript;
+                if (event.results[i].isFinal) {
+                    finalTranscript += transcript + ' ';
+                } else {
+                    interimTranscript += transcript;
+                }
+            }
+
+            // Display real-time transcription
+            transcriptText.textContent = finalTranscript + interimTranscript;
+
+            // Reset silence timeout on speech
+            if (silenceTimeout) {
+                clearTimeout(silenceTimeout);
+            }
+
+            silenceTimeout = setTimeout(() => {
+                if (isRecording) {
+                    console.log('Auto-stopping due to silence');
+                    stopRecording();
+                }
+            }, SILENCE_DURATION);
+        };
+
+        recognition.onerror = (event) => {
+            console.error('Recognition error:', event.error);
+            if (event.error === 'no-speech') {
+                statusDiv.textContent = 'No speech detected. Please try again.';
+                statusDiv.className = 'status-message error';
+            } else {
+                statusDiv.textContent = `Error: ${event.error}`;
+                statusDiv.className = 'status-message error';
+            }
+            stopRecording();
+        };
+
+        recognition.onend = () => {
+            if (isRecording) {
+                // Restart if still supposed to be recording
+                try {
+                    recognition.start();
+                } catch (e) {
+                    console.log('Recognition restart not needed');
+                }
+            }
+        };
+
+        function processTranscript(transcript) {
+            statusDiv.textContent = 'Processing your reminder...';
+            statusDiv.className = 'status-message';
+
+            fetch('{% url "create_reminder" %}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': getCsrfToken()
+                },
+                body: JSON.stringify({
+                    task_description: transcript.trim()
+                })
+            })
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        statusDiv.textContent = data.error;
+                        statusDiv.className = 'status-message error';
+                    } else {
+                        // Display parsed details
+                        document.getElementById('parsedTask').textContent = data.task;
+                        document.getElementById('parsedDate').textContent = data.formatted_date;
+                        document.getElementById('parsedTime').textContent = data.formatted_time;
+                        document.getElementById('parsedType').textContent = data.reminder_type;
+                        parsedDetailsDiv.style.display = 'block';
+
+                        statusDiv.textContent = '✅ Reminder created successfully!';
+                        statusDiv.className = 'status-message success';
+
+                        // Redirect after 2 seconds
+                        setTimeout(() => {
+                            window.location.href = '{% url "landing" %}';
+                        }, 2000);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    statusDiv.textContent = 'Failed to create reminder. Please try again.';
+                    statusDiv.className = 'status-message error';
+                });
+        }
+    </script>
+</body>
+
+</html>

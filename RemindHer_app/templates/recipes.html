@@ -1,0 +1,214 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recipes - RemindHer</title>
+    <link rel="stylesheet" href="{% static 'css/landing.css' %}">
+    <style>
+        body {
+            background: linear-gradient(135deg, #0a0a0a, #1a1a2e);
+            color: #ffffff;
+            font-family: 'Arial', sans-serif;
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #00d4ff;
+            font-size: 2.5em;
+            text-shadow: 0 0 10px #00d4ff;
+        }
+        .recipe-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(350px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+        .recipe-card {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid #00d4ff;
+            border-radius: 10px;
+            padding: 20px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 15px rgba(0, 212, 255, 0.2);
+            transition: transform 0.3s ease;
+        }
+        .recipe-card:hover {
+            transform: translateY(-5px);
+        }
+        .recipe-name {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #00d4ff;
+            margin-bottom: 10px;
+        }
+        .recipe-meta {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 15px;
+            font-size: 0.9em;
+            color: #ccc;
+        }
+        .recipe-description {
+            margin-bottom: 15px;
+            color: #eee;
+        }
+        .recipe-tags {
+            margin-bottom: 15px;
+        }
+        .tag {
+            display: inline-block;
+            background: #ff6b6b;
+            color: #fff;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8em;
+            margin-right: 5px;
+            margin-bottom: 5px;
+        }
+        .btn {
+            padding: 8px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-weight: bold;
+            transition: all 0.3s ease;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
+        }
+        .btn-primary {
+            background: #00d4ff;
+            color: #000;
+        }
+        .btn-primary:hover {
+            background: #0099cc;
+        }
+        .btn-secondary {
+            background: #ff6b6b;
+            color: #fff;
+        }
+        .btn-secondary:hover {
+            background: #cc5555;
+        }
+        .actions {
+            margin-top: 20px;
+            text-align: center;
+        }
+        .search-section {
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid #00d4ff;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 30px;
+            backdrop-filter: blur(10px);
+        }
+        .search-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #00d4ff;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            margin-bottom: 10px;
+        }
+        .search-input::placeholder {
+            color: #ccc;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🍳 Smart Recipes</h1>
+            <p>Discover recipes based on your inventory and preferences</p>
+        </div>
+
+        <div class="search-section">
+            <h2>Find Recipes</h2>
+            <input type="text" class="search-input" id="searchInput" placeholder="Search recipes...">
+            <a href="{% url 'suggest_recipes' %}" class="btn btn-primary">Suggest Recipes from Inventory</a>
+        </div>
+
+        <div class="recipe-grid" id="recipeGrid">
+            {% for recipe in recipes %}
+            <div class="recipe-card">
+                <div class="recipe-name">{{ recipe.name }}</div>
+                <div class="recipe-meta">
+                    <span>⏱️ {{ recipe.prep_time }}min prep</span>
+                    <span>🍳 {{ recipe.cook_time }}min cook</span>
+                    <span>👥 {{ recipe.servings }} servings</span>
+                </div>
+                <div class="recipe-description">{{ recipe.description|truncatechars:100 }}</div>
+                <div class="recipe-tags">
+                    <span class="tag">{{ recipe.difficulty }}</span>
+                    {% if recipe.tags %}
+                        {% for tag in recipe.tags %}
+                            <span class="tag">{{ tag }}</span>
+                        {% endfor %}
+                    {% endif %}
+                </div>
+                <div class="recipe-actions">
+                    <a href="#" class="btn btn-primary" onclick="startCooking({{ recipe.id }})">Start Cooking</a>
+                    <button class="btn btn-secondary" onclick="viewRecipe({{ recipe.id }})">View Details</button>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+
+        <div class="actions">
+            <a href="{% url 'landing' %}" class="btn btn-secondary">Back to Dashboard</a>
+        </div>
+    </div>
+
+    <script>
+        function startCooking(recipeId) {
+            fetch(`/cooking/start/${recipeId}/`, {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': '{{ csrf_token }}'
+                }
+            })
+            .then(response => {
+                if (response.ok) {
+                    window.location.href = response.url;
+                } else {
+                    alert('Failed to start cooking session');
+                }
+            });
+        }
+
+        function viewRecipe(recipeId) {
+            // For now, just alert - in a real app, show modal or redirect
+            alert('Recipe details would be shown here');
+        }
+
+        // Simple search functionality
+        document.getElementById('searchInput').addEventListener('input', function() {
+            const searchTerm = this.value.toLowerCase();
+            const cards = document.querySelectorAll('.recipe-card');
+
+            cards.forEach(card => {
+                const name = card.querySelector('.recipe-name').textContent.toLowerCase();
+                const description = card.querySelector('.recipe-description').textContent.toLowerCase();
+                if (name.includes(searchTerm) || description.includes(searchTerm)) {
+                    card.style.display = 'block';
+                } else {
+                    card.style.display = 'none';
+                }
+            });
+        });
+    </script>
+</body>
+</html>
