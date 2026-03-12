@@ -1,4 +1,4 @@
-from django.contrib.auth import authenticate, login
+from django.contrib.auth import authenticate, login, logout
 from django.shortcuts import render, redirect
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -69,11 +69,17 @@ def Login_view(request):
 
     return render(request, 'Login.html')
 
+@login_required
+@login_required
 def landing(request):
     return render(request, 'landing.html')
 
 def Register_view(request):
     return render(request, 'Register.html')
+
+def logout_view(request):
+    logout(request)
+    return redirect('login')
 
 def splashscreen(request):
     return render(request, 'splashscreen.html')
@@ -1029,16 +1035,73 @@ def complete_grocery_list(request):
 
 @login_required
 def get_grocery_suggestions(request):
+    from django.db.models import F
+    
     # Suggest items based on low inventory
     low_stock_items = InventoryItem.objects.filter(
         user=request.user,
-        quantity__lte=models.F('low_stock_threshold')
+        quantity__lte=F('low_stock_threshold')
     ).values_list('name', flat=True)
 
     # Suggest items based on consumption patterns (simplified)
     suggestions = list(low_stock_items)
-
+    
+    # Add default suggestions if no low-stock items
+    if not suggestions:
+        suggestions = [
+            'Milk', 'Bread', 'Eggs', 'Butter', 'Cheese',
+            'Chicken', 'Rice', 'Onions', 'Tomatoes', 'Potatoes',
+            'Salt', 'Sugar', 'Oil', 'Garlic', 'Green Vegetables'
+        ]
+    
     return JsonResponse({'suggestions': suggestions})
+
+@login_required
+@csrf_exempt
+def create_grocery_reminder(request):
+    """Create a reminder for a grocery item"""
+    if request.method == 'POST':
+        try:
+            data = json.loads(request.body)
+            item_name = data.get('item_name', '').strip()
+            reminder_date = data.get('reminder_date')
+            reminder_time = data.get('reminder_time')
+            
+            if not item_name:
+                return JsonResponse({'error': 'Item name is required'}, status=400)
+            
+            if not reminder_date or not reminder_time:
+                return JsonResponse({'error': 'Date and time are required'}, status=400)
+            
+            # Parse the date and time
+            from datetime import datetime
+            try:
+                reminder_dt = datetime.strptime(f"{reminder_date} {reminder_time}", '%Y-%m-%d %H:%M')
+                task_date = reminder_dt.date()
+                task_time = reminder_dt.time()
+            except ValueError:
+                return JsonResponse({'error': 'Invalid date or time format'}, status=400)
+            
+            # Create the reminder
+            reminder = AddTask.objects.create(
+                user=request.user,
+                task_name=f"Buy {item_name}",
+                task_date=task_date,
+                task_time=task_time,
+                reminder_type='Once'
+            )
+            
+            return JsonResponse({
+                'message': f'Reminder set for {item_name} on {reminder_date} at {reminder_time}',
+                'reminder_id': reminder.id
+            })
+            
+        except json.JSONDecodeError:
+            return JsonResponse({'error': 'Invalid JSON data'}, status=400)
+        except Exception as e:
+            return JsonResponse({'error': str(e)}, status=500)
+    
+    return JsonResponse({'error': 'Method not allowed'}, status=405)
 #     if request.method == "POST":
 #         task = request.POST.get('task')
 #         task_time_str = request.POST.get('task_time')

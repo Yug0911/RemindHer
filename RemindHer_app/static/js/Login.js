@@ -5,45 +5,18 @@ document.addEventListener('DOMContentLoaded', () => {
     const googleButton = document.getElementById('googleLogin');
     const facebookButton = document.getElementById('facebookLogin');
 
-    // Form submission
-    form.addEventListener('submit', async (e) => {
-        e.preventDefault();
-        
-        // Reset error state
-        errorMessage.style.display = 'none';
+    // Form submission - let it submit normally to Django
+    form.addEventListener('submit', () => {
         submitButton.disabled = true;
         submitButton.textContent = 'Signing in...';
-
-        const email = form.email.value;
-        const password = form.password.value;
-
-        try {
-            await signInWithCredentials({
-                email,
-                password,
-                callbackUrl: "/app",
-                redirect: true
-            });
-        } catch (err) {
-            errorMessage.textContent = "Invalid email or password";
-            errorMessage.style.display = 'block';
-            submitButton.disabled = false;
-            submitButton.textContent = 'Sign In';
-        }
     });
 
-    // Social login handlers
+    // Social login handlers - show message for now
     googleButton.addEventListener('click', () => {
-        signInWithGoogle({
-            callbackUrl: "/app",
-            redirect: true
-        });
+        alert('Google login is not configured. Please use email login.');
     });
 
     facebookButton.addEventListener('click', () => {
-        signInWithFacebook({
-            callbackUrl: "/app",
-            redirect: true
-        });
+        alert('Facebook login is not configured. Please use email login.');
     });
 });

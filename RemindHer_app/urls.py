@@ -20,6 +20,7 @@ from . import views
 
 urlpatterns = [
     path('login/', views.Login_view, name='login'),
+    path('logout/', views.logout_view, name='logout'),
     path('register/', views.Register_view, name='register'),
     path('', views.splashscreen, name='splashscreen'),
 
@@ -61,4 +62,5 @@ urlpatterns = [
     path('grocery/delete/<int:item_index>/', views.delete_grocery_item, name='delete_grocery_item'),
     path('grocery/complete/', views.complete_grocery_list, name='complete_grocery_list'),
     path('grocery/suggestions/', views.get_grocery_suggestions, name='grocery_suggestions'),
+    path('grocery/reminder/', views.create_grocery_reminder, name='create_grocery_reminder'),
 ]

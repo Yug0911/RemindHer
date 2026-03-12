@@ -20,7 +20,7 @@
             <p>Welcome Back!</p>
           </div>
 
-          <form action="{% url 'landing' %}" method="POST">
+          <form id="signinForm" action="{% url 'login' %}" method="POST">
             {% csrf_token %}
             <div class="form-group">
               <label for="email">Email</label>

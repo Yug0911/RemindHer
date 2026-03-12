@@ -57,10 +57,7 @@
                 <span>Quick Actions</span>
             </div>
 
-            <form method="POST" action="{% url 'login' %}">
-                {% csrf_token %}
-                <button type="submit" class="secondary-button">Logout</button>
-            </form>
+            <a href="{% url 'logout' %}" class="secondary-button">Logout</a>
         </div>
     </div>
 </body>
