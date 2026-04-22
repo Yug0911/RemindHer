@@ -77,6 +77,7 @@ CELERY_BEAT_SCHEDULE = {
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
@@ -153,13 +154,12 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Static files (CSS, JavaScript, Images)
 STATIC_URL = '/static/'
-
-# 🔹 Add this line
 STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 # Additional directories for static files
 STATICFILES_DIRS = [
-    os.path.join(BASE_DIR, 'RemindHer_app', 'static'),  # Adjust if needed
+    os.path.join(BASE_DIR, 'RemindHer_app', 'static'),
 ]
 
 
