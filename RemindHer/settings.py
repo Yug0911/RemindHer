@@ -142,14 +142,6 @@ STATICFILES_DIRS = [
 ]
 
 
-from celery import Celery
-
-os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'RemindHer.settings')
-app = Celery('RemindHer')
-app.config_from_object('django.conf:settings', namespace='CELERY')
-app.autodiscover_tasks()
-
-
 CSRF_COOKIE_SECURE = False  # For local testing
 CSRF_COOKIE_HTTPONLY = False
 
