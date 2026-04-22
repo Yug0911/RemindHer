@@ -1,12 +1,12 @@
 """
 ARIA Brain — Self-contained AI for RemindHer
 No external API needed. Runs 100% locally inside Django.
-Uses: regex + keyword matching + dateparser
+Uses: regex + keyword matching + datetime
 """
 
 import re
 import random
-import dateparser
+from datetime import datetime, timedelta
 from django.utils import timezone
 from urllib.parse import urlencode
 
@@ -181,11 +181,34 @@ def extract_entities(text):
         "website": None,
     }
     
-    # Try dateparser for natural time expressions
-    parsed_dt = dateparser.parse(text, settings={"PREFER_DATES_FROM": "future"})
-    if parsed_dt:
-        entities["time"] = parsed_dt.strftime("%I:%M %p")
-        entities["date"] = parsed_dt.strftime("%Y-%m-%d")
+    # Simple date/time extraction using regex
+    text_lower = text.lower()
+    
+    # Extract time patterns (e.g., "at 3pm", "at 3:30pm")
+    time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm)?', text_lower)
+    if time_match:
+        hour = int(time_match.group(1))
+        minute = time_match.group(2) or "00"
+        ampm = time_match.group(3)
+        if ampm == "pm" and hour != 12:
+            hour += 12
+        elif ampm == "am" and hour == 12:
+            hour = 0
+        if 0 <= hour <= 23:
+            entities["time"] = f"{hour:02}:{minute} {'PM' if hour >= 12 else 'AM'}"
+            entities["date"] = datetime.now().strftime("%Y-%m-%d")
+    
+    # Extract date patterns
+    date_patterns = [
+        (r'today', 0),
+        (r'tomorrow', 1),
+        (r'next week', 7),
+    ]
+    for pattern, days in date_patterns:
+        if pattern in text_lower:
+            future_date = datetime.now() + timedelta(days=days)
+            entities["date"] = future_date.strftime("%Y-%m-%d")
+            break
     
     # Extract food-related words
     food_keywords = {"milk","eggs","bread","tomato","chicken","rice","pasta",
