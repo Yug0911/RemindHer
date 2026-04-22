@@ -1,267 +1,164 @@
+{% extends 'base.html' %}
 {% load static %}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Cooking {{ recipe.name }} - RemindHer</title>
-    <link rel="stylesheet" href="{% static 'css/landing.css' %}">
-    <style>
-        body {
-            background: linear-gradient(135deg, #0a0a0a, #1a1a2e);
-            color: #ffffff;
-            font-family: 'Arial', sans-serif;
-            margin: 0;
-            padding: 0;
-            min-height: 100vh;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            padding: 20px;
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .header h1 {
-            color: #00d4ff;
-            font-size: 2em;
-            text-shadow: 0 0 10px #00d4ff;
-        }
-        .recipe-info {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid #00d4ff;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            backdrop-filter: blur(10px);
-        }
-        .step-container {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid #00d4ff;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            backdrop-filter: blur(10px);
-        }
-        .step-number {
-            font-size: 1.5em;
-            font-weight: bold;
-            color: #00d4ff;
-            margin-bottom: 10px;
-        }
-        .step-content {
-            font-size: 1.1em;
-            line-height: 1.6;
-            margin-bottom: 20px;
-        }
-        .step-actions {
-            display: flex;
-            gap: 10px;
-            justify-content: center;
-        }
-        .btn {
-            padding: 10px 20px;
-            border: none;
-            border-radius: 5px;
-            cursor: pointer;
-            font-weight: bold;
-            transition: all 0.3s ease;
-        }
-        .btn-primary {
-            background: #00d4ff;
-            color: #000;
-        }
-        .btn-primary:hover {
-            background: #0099cc;
-        }
-        .btn-secondary {
-            background: #ff6b6b;
-            color: #fff;
-        }
-        .btn-secondary:hover {
-            background: #cc5555;
-        }
-        .timer-section {
-            background: rgba(255, 255, 255, 0.1);
-            border: 1px solid #00d4ff;
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            backdrop-filter: blur(10px);
-        }
-        .timer-input {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-            margin-bottom: 10px;
-        }
-        .timer-input input {
-            padding: 8px;
-            border: 1px solid #00d4ff;
-            border-radius: 5px;
-            background: rgba(255, 255, 255, 0.1);
-            color: #fff;
-        }
-        .active-timers {
-            margin-top: 10px;
-        }
-        .timer-item {
-            background: #ff6b6b;
-            color: #fff;
-            padding: 5px 10px;
-            border-radius: 15px;
-            margin-right: 10px;
-            margin-bottom: 5px;
-            display: inline-block;
-        }
-        .completed {
-            text-align: center;
-            color: #00d4ff;
-            font-size: 1.2em;
-            font-weight: bold;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <h1>👨‍🍳 Cooking: {{ recipe.name }}</h1>
-            <p>Step {{ current_step }} of {{ instructions|length }}</p>
-        </div>
 
-        <div class="recipe-info">
-            <h2>Recipe Info</h2>
-            <p><strong>Prep Time:</strong> {{ recipe.prep_time }} minutes</p>
-            <p><strong>Cook Time:</strong> {{ recipe.cook_time }} minutes</p>
-            <p><strong>Servings:</strong> {{ recipe.servings }}</p>
-            <p><strong>Difficulty:</strong> {{ recipe.difficulty }}</p>
-        </div>
+{% block title %}Cooking: {{ recipe.name }} - RemindHer{% endblock %}
+{% block page_title %}Cooking Session{% endblock %}
+{% block page_subtitle %}{{ recipe.name }}{% endblock %}
 
-        {% if session.completed_at %}
-        <div class="completed">
-            🎉 Cooking session completed! Enjoy your meal!
+{% block content %}
+<div class="card" style="max-width: 800px; margin: 0 auto;">
+    <!-- Recipe Info -->
+    <div class="card-header">
+        <div>
+            <h2 class="card-title">{{ recipe.name }}</h2>
+            <p style="color: var(--text-secondary);">Step {{ step_number }} of {{ instructions|length }}</p>
         </div>
-        {% else %}
-        <div class="step-container">
-            <div class="step-number">Step {{ current_step }}</div>
-            <div class="step-content">
-                {% if instructions %}
-                    {{ instructions|slice:":current_step"|last }}
+        <div class="badge badge-info">{{ progress }}%</div>
+    </div>
+    
+    <!-- Progress Bar -->
+    <div class="progress-bar" style="height: 12px; margin-bottom: 30px;">
+        <div class="progress-fill" style="width: {{ progress }}%;"></div>
+    </div>
+    
+    <!-- Current Step -->
+    {% if current_step %}
+    <div style="text-align: center; padding: 40px 20px;">
+        <div style="font-size: 4rem; margin-bottom: 20px;">👩‍🍳</div>
+        <h3 style="font-size: 1.5rem; margin-bottom: 20px;">{{ current_step.instruction }}</h3>
+        
+        {% if current_step.timer_minutes %}
+        <div style="margin: 30px 0;">
+            <p style="color: var(--text-secondary); margin-bottom: 12px;">Timer: {{ current_step.timer_minutes }} minutes</p>
+            <div class="timer-display" id="timer-display" data-timer-end="{{ session.timer_end|date:'c' }}">
+                {% if session.timer_end %}
+                <span id="timer-text">{{ session.timer_end|date:'H:i:s' }}</span>
                 {% else %}
-                    Step instructions would be displayed here.
+                <button class="btn btn-primary" onclick="startTimer({{ current_step.timer_minutes }})">
+                    <span>⏱️</span>
+                    Start {{ current_step.timer_minutes }}min Timer
+                </button>
                 {% endif %}
-            </div>
-            <div class="step-actions">
-                {% if current_step > 1 %}
-                <button class="btn btn-secondary" onclick="previousStep()">Previous Step</button>
-                {% endif %}
-                <button class="btn btn-primary" onclick="nextStep()">Next Step</button>
-                {% if current_step == instructions|length %}
-                <button class="btn btn-primary" onclick="completeCooking()">Finish Cooking</button>
-                {% endif %}
-            </div>
-        </div>
-
-        <div class="timer-section">
-            <h3>⏰ Cooking Timers</h3>
-            <div class="timer-input">
-                <input type="text" id="timerName" placeholder="Timer name (e.g., Boil pasta)">
-                <input type="number" id="timerDuration" placeholder="Minutes" min="1">
-                <button class="btn btn-primary" onclick="setTimer()">Set Timer</button>
-            </div>
-            <div class="active-timers" id="activeTimers">
-                <!-- Active timers will be displayed here -->
             </div>
         </div>
         {% endif %}
-
-        <div style="text-align: center; margin-top: 30px;">
-            <a href="{% url 'recipe_list' %}" class="btn btn-secondary">Back to Recipes</a>
-        </div>
     </div>
+    {% endif %}
+    
+    <!-- Navigation -->
+    <div style="display: flex; justify-content: space-between; gap: 16px;">
+        <button class="btn btn-secondary" onclick="prevStep()" {% if step_number == 1 %}disabled{% endif %}>
+            <span>⬅️</span>
+            Previous
+        </button>
+        
+        {% if session.is_completed %}
+        <a href="{% url 'recipes' %}" class="btn btn-success">
+            <span>✅</span>
+            Finish & Return to Recipes
+        </a>
+        {% else %}
+        <button class="btn btn-primary" onclick="nextStep()">
+            <span>➡️</span>
+            {% if step_number == instructions|length %}Finish{% else %}Next Step{% endif %}
+        </button>
+        {% endif %}
+    </div>
+</div>
 
-    <script>
-        const sessionId = {{ session.id }};
-        const totalSteps = {{ instructions|length }};
-        let currentStep = {{ current_step }};
+<!-- Timer Alert -->
+<div id="timer-alert" class="alert alert-success hidden" style="max-width: 800px; margin: 20px auto; display: none;">
+    <span>🔔</span>
+    <span>Timer complete! Your cooking step is done.</span>
+</div>
+{% endblock %}
 
-        function nextStep() {
-            if (currentStep < totalSteps) {
-                currentStep++;
-                updateStep(currentStep);
-            }
-        }
+{% block extra_js %}
+<script>
+const csrftoken = getCookie('csrftoken');
+const sessionId = {{ session.id }};
 
-        function previousStep() {
-            if (currentStep > 1) {
-                currentStep--;
-                updateStep(currentStep);
-            }
-        }
-
-        function updateStep(step) {
-            fetch(`/cooking/update-step/${sessionId}/`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-CSRFToken': '{{ csrf_token }}'
-                },
-                body: JSON.stringify({ step: step })
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.completed) {
-                    location.reload();
-                } else {
-                    document.querySelector('.step-number').textContent = `Step ${step}`;
-                    // In a real app, update step content
-                    location.reload(); // Simple reload for now
-                }
-            });
-        }
-
-        function completeCooking() {
-            updateStep(totalSteps);
-        }
-
-        function setTimer() {
-            const name = document.getElementById('timerName').value;
-            const duration = document.getElementById('timerDuration').value;
-
-            if (name && duration) {
-                fetch(`/cooking/set-timer/${sessionId}/`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'X-CSRFToken': '{{ csrf_token }}'
-                    },
-                    body: JSON.stringify({
-                        name: name,
-                        duration: parseInt(duration)
-                    })
-                })
-                .then(response => response.json())
-                .then(data => {
-                    alert(data.message);
-                    document.getElementById('timerName').value = '';
-                    document.getElementById('timerDuration').value = '';
-                    updateActiveTimers();
-                });
-            }
-        }
-
-        function updateActiveTimers() {
-            // In a real app, fetch and display active timers
-            // For now, just clear
-            document.getElementById('activeTimers').innerHTML = '';
-        }
-
-        // Update timers on load
-        document.addEventListener('DOMContentLoaded', function() {
-            updateActiveTimers();
+// Navigation
+async function nextStep() {
+    try {
+        const response = await fetch(`/cooking/update-step/${sessionId}/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+            body: JSON.stringify({ direction: 'next' })
         });
-    </script>
-</body>
-</html>
+        
+        const data = await response.json();
+        if (response.ok) {
+            location.reload();
+        }
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+async function prevStep() {
+    try {
+        const response = await fetch(`/cooking/update-step/${sessionId}/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+            body: JSON.stringify({ direction: 'prev' })
+        });
+        
+        const data = await response.json();
+        if (response.ok) {
+            location.reload();
+        }
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+// Timer
+async function startTimer(minutes) {
+    try {
+        const response = await fetch(`/cooking/set-timer/${sessionId}/`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'X-CSRFToken': csrftoken },
+            body: JSON.stringify({ minutes })
+        });
+        
+        if (response.ok) {
+            location.reload();
+        }
+    } catch (error) {
+        console.error('Error:', error);
+    }
+}
+
+// Initialize timer if running
+const timerEl = document.getElementById('timer-display');
+if (timerEl && timerEl.dataset.timerEnd) {
+    const endTime = new Date(timerEl.dataset.timerEnd);
+    
+    function updateTimer() {
+        const now = new Date();
+        const diff = endTime - now;
+        
+        if (diff <= 0) {
+            document.getElementById('timer-text').textContent = '00:00';
+            document.getElementById('timer-display').classList.add('done');
+            document.getElementById('timer-alert').style.display = 'flex';
+            
+            // Speak timer complete
+            if (window.assistant) {
+                window.assistant.speak("Time is up! Your cooking step is complete.");
+            }
+            return;
+        }
+        
+        const m = Math.floor(diff / 60000);
+        const s = Math.floor((diff % 60000) / 1000);
+        document.getElementById('timer-text').textContent = 
+            `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+    }
+    
+    updateTimer();
+    setInterval(updateTimer, 1000);
+}
+</script>
+{% endblock %}

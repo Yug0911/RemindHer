@@ -1,1208 +1,604 @@
-from django.contrib.auth import authenticate, login, logout
-from django.shortcuts import render, redirect
-from rest_framework.response import Response
-from rest_framework.views import APIView
-from rest_framework import status
-from .models import User, Reminder, AddTask, InventoryItem, Recipe, GroceryList, UserPreferences, CookingSession
-from .serializers import UserSerializer
-from rest_framework.parsers import JSONParser, FormParser
-from django.contrib.auth.decorators import login_required
-from django.views.decorators.csrf import csrf_exempt
-from datetime import datetime, timedelta
-from celery import shared_task
-from django_celery_beat.models import PeriodicTask, CrontabSchedule
 import json
-import re
-from django.http import HttpResponse, JsonResponse
-from dateparser import parse
+from .aria_brain import process_message, clear_context
+from django.shortcuts import render, redirect, get_object_or_404
+from django.contrib.auth import login, logout, authenticate
+from django.contrib.auth.decorators import login_required
+from django.contrib import messages
+from django.http import JsonResponse
+from django.utils import timezone
+from django.views.decorators.http import require_POST
+from .models import Reminder, InventoryItem, Recipe, GroceryList, CookingSession, UserPreferences, CustomUser
 
 
-# Existing views unchanged
-class RegisterView(APIView):
-    def post(self, request):
-        serializer = UserSerializer(data=request.data)
-        if serializer.is_valid():
-            user = serializer.save()
-            # Log the user in automatically after registration
-            login(request, user)
-            # Redirect to landing page (home page) after successful registration
-            return redirect('landing')
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+# ==================== Authentication Views ====================
 
-class LoginView(APIView):
-    def post(self, request):
-        email = request.data.get('email')
-        password = request.data.get('password')
-
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
-            return Response({'error': 'User not registered'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if not user.check_password(password):
-            return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
-
-        if user.status != 'Active':
-            return Response({'error': 'Account is inactive'}, status=status.HTTP_400_BAD_REQUEST)
-
-        login(request, user)
-        return Response({'message': 'Login successful'}, status=status.HTTP_200_OK)
-    
-def Login_view(request):
+def login_view(request):
     if request.method == 'POST':
         email = request.POST.get('email')
         password = request.POST.get('password')
-
-        try:
-            user = User.objects.get(email=email)
-        except User.DoesNotExist:
-            return render(request, 'Login.html', {'error': 'User not registered'})
-
-        if not user.check_password(password):
-            return render(request, 'Login.html', {'error': 'Invalid credentials'})
-
-        if user.status != 'Active':
-            return render(request, 'Login.html', {'error': 'Account is inactive'})
-
-        login(request, user)
-        return redirect('landing')  # Redirect to landing page
-
+        user = authenticate(request, username=email, password=password)
+        if user is not None:
+            login(request, user)
+            return redirect('dashboard')
+        else:
+            messages.error(request, 'Invalid email or password')
     return render(request, 'Login.html')
 
-@login_required
-@login_required
-def landing(request):
-    return render(request, 'landing.html')
 
-def Register_view(request):
+def register_view(request):
+    if request.method == 'POST':
+        email = request.POST.get('email')
+        password = request.POST.get('password')
+        name = request.POST.get('name')
+        
+        if CustomUser.objects.filter(email=email).exists():
+            messages.error(request, 'Email already exists')
+            return redirect('register')
+        
+        user = CustomUser.objects.create_user(email=email, password=password, name=name)
+        login(request, user)
+        return redirect('dashboard')
     return render(request, 'Register.html')
+
 
 def logout_view(request):
     logout(request)
     return redirect('login')
 
+
 def splashscreen(request):
     return render(request, 'splashscreen.html')
 
+
+# ==================== Dashboard ====================
+
+@login_required
+def dashboard(request):
+    # Get stats for dashboard
+    reminders_count = Reminder.objects.filter(user=request.user, is_completed=False).count()
+    inventory_count = InventoryItem.objects.filter(user=request.user).count()
+    expiring_count = InventoryItem.objects.filter(
+        user=request.user,
+        expiration_date__gte=timezone.now().date(),
+        expiration_date__lte=timezone.now().date() + timezone.timedelta(days=3)
+    ).count()
+    
+    # Get recent reminders
+    recent_reminders = Reminder.objects.filter(user=request.user).order_by('-created_at')[:5]
+    
+    return render(request, 'dashboard.html', {
+        'reminders_count': reminders_count,
+        'inventory_count': inventory_count,
+        'expiring_count': expiring_count,
+        'recent_reminders': recent_reminders,
+    })
+
+
+# ==================== Reminder Views ====================
+
 @login_required
 def create_reminder(request):
-    if request.method == "POST":
-        try:
-            data = json.loads(request.body)
-            task_description = data.get('task_description', '').strip()
-
-            if not task_description:
-                return JsonResponse({'error': 'Task description is required'}, status=400)
-
-            # Parse the natural language description
-            # For task: everything before time/date indicators or use full text
-            task = task_description
-            
-            # Try to parse date and time from the description
-            parsed_datetime = dateparser.parse(
-                task_description,
-                settings={
-                    'PREFER_DATES_FROM': 'future',
-                    'RETURN_AS_TIMEZONE_AWARE': False,
-                    'RELATIVE_BASE': datetime.datetime.now()
-                }
-            )
-            
-            # Extract task name by removing common time/date phrases
-            import re
-            # Remove common reminder phrases
-            task_clean = re.sub(r'\b(remind me to|reminder to|remind|task)\b', '', task_description, flags=re.IGNORECASE).strip()
-            # Remove date/time phrases
-            time_patterns = [
-                r'\b(at|on|in|by|tomorrow|today|tonight|this|next|every|daily)\s+\d+',
-                r'\b\d+\s*(am|pm|AM|PM|o\'clock)\b',
-                r'\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b',
-                r'\b(tomorrow|today|tonight)\b',
-                r'\b(morning|afternoon|evening|night)\b',
-                r'\bat\s+[\w\s:]+',
-                r'\bon\s+[\w\s,]+',
-            ]
-            for pattern in time_patterns:
-                task_clean = re.sub(pattern, '', task_clean, flags=re.IGNORECASE)
-            
-            task = task_clean.strip() or task_description
-            
-            # Set defaults if parsing failed
-            now = datetime.datetime.now()
-            if parsed_datetime:
-                task_date = parsed_datetime.date()
-                task_time = parsed_datetime.time()
-            else:
-                # Default: tomorrow at 9 AM
-                task_date = (now + datetime.timedelta(days=1)).date()
-                task_time = datetime.time(9, 0)
-            
-            # Determine reminder type (check for "daily" or "every day" keywords)
-            reminder_type = 'Daily' if any(word in task_description.lower() for word in ['daily', 'every day', 'everyday']) else 'Once'
-
-            # Create the reminder
-            reminder = Reminder.objects.create(
-                user=request.user,
-                task=task,
-                task_time=task_time,
-                task_date=task_date,
-                reminder_type=reminder_type
-            )
-
-            # Schedule the reminder (don't fail if scheduling fails)
-            try:
-                schedule_reminder(reminder)
-            except Exception as e:
-                print(f"Warning: Failed to schedule reminder: {e}")
-                # Continue anyway - reminder is still created
-            
-            # Format date and time for display
-            formatted_date = task_date.strftime('%B %d, %Y')
-            formatted_time = task_time.strftime('%I:%M %p')
-
-            return JsonResponse({
-                'message': 'Reminder created successfully',
-                'reminder_id': reminder.id,
-                'task': task,
-                'formatted_date': formatted_date,
-                'formatted_time': formatted_time,
-                'reminder_type': reminder_type
-            })
-
-        except json.JSONDecodeError:
-            return JsonResponse({'error': 'Invalid JSON data'}, status=400)
-        except Exception as e:
-            import traceback
-            traceback.print_exc()
-            return JsonResponse({'error': f"An error occurred: {str(e)}"}, status=500)
-
-    # Render the template for GET requests
-    return render(request, 'create_reminder.html')
-
-@shared_task
-def play_ringtone(reminder_id):
-    try:
-        # from playsound import playsound  # Commented out due to installation issues
-        reminder = Reminder.objects.get(id=reminder_id)
-        print(f"Reminder triggered: {reminder.task} at {reminder.task_time}")
-        # Try to play the sound file, but don't fail if it doesn't exist
-        # try:
-        #     playsound('RemindHer_app/static/images/marco.mp3')
-        # except Exception as e:
-        #     print(f"Warning: Could not play sound file: {e}")
-        # Could implement alternative notification here (browser notification, etc.)
-        reminder.is_completed = True
-        reminder.save()
-    except Exception as e:
-        print(f"Error in play_ringtone: {e}")
-
-def schedule_reminder(reminder):
-    try:
-        schedule, _ = CrontabSchedule.objects.get_or_create(
-            minute=reminder.task_time.minute,
-            hour=reminder.task_time.hour,
-            day_of_month=reminder.task_date.day,
-            month_of_year=reminder.task_date.month,
+    if request.method == 'POST':
+        Reminder.objects.create(
+            user=request.user,
+            task=request.POST.get('task'),
+            reminder_date=request.POST.get('reminder_date'),
+            reminder_time=request.POST.get('reminder_time'),
+            reminder_type=request.POST.get('reminder_type', 'once')
         )
-        PeriodicTask.objects.create(
-            crontab=schedule,
-            name=f'reminder-{reminder.id}',
-            task='RemindHer_app.views.play_ringtone',
-            args=json.dumps([reminder.id]),
-            one_off=reminder.reminder_type.lower() == 'once'
-        )
-    except Exception as e:
-        print(f"Warning: Failed to schedule reminder task: {e}")
-        # Reminder is still created, just not scheduled
+        messages.success(request, 'Reminder created!')
+        return redirect('view_reminders')
+    return render(request, 'reminders.html', {'mode': 'create'})
 
-@login_required
-def snooze_reminder(request, reminder_id, minutes):
-    try:
-        reminder = Reminder.objects.get(id=reminder_id, user=request.user)
-        new_time = (datetime.combine(reminder.task_date, reminder.task_time) + timedelta(minutes=minutes)).time()
-        reminder.task_time = new_time
-        reminder.is_completed = False
-        reminder.save()
-        schedule_reminder(reminder)
-        return JsonResponse({'message': 'Reminder snoozed'})
-    except Reminder.DoesNotExist:
-        return JsonResponse({'error': 'Reminder not found'}, status=404)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-@login_required
-def cancel_reminder(request, reminder_id):
-    try:
-        reminder = Reminder.objects.get(id=reminder_id, user=request.user)
-        reminder.is_completed = True
-        reminder.save()
-        PeriodicTask.objects.filter(name=f'reminder-{reminder.id}').delete()
-        return JsonResponse({'message': 'Reminder canceled'})
-    except Reminder.DoesNotExist:
-        return JsonResponse({'error': 'Reminder not found'}, status=404)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-@login_required
-def check_reminders(request):
-    now = datetime.now()
-    reminders = Reminder.objects.filter(
-        user=request.user,
-        task_date=now.date(),
-        task_time__hour=now.hour,
-        task_time__minute=now.minute,
-        is_completed=False
-    )
-    if reminders.exists():
-        reminder = reminders.first()
-        return JsonResponse({
-            'reminder': {'id': reminder.id, 'task': reminder.task}
-        })
-    return JsonResponse({'reminder': None})
 
 @login_required
 def view_reminders(request):
-    # Get both Reminder and AddTask objects
-    reminders = list(Reminder.objects.filter(user=request.user, is_completed=False).order_by('task_date', 'task_time'))
-    add_tasks = list(AddTask.objects.filter(user=request.user, is_completed=False).order_by('task_date', 'task_time'))
-
-    # Combine and sort all reminders
-    all_reminders = []
-    for r in reminders:
-        all_reminders.append({
-            'id': r.id,
-            'task': r.task,
-            'task_time': r.task_time,
-            'task_date': r.task_date,
-            'reminder_type': r.reminder_type,
-            'created_at': r.created_at,
-            'type': 'reminder'
-        })
-
-    for t in add_tasks:
-        all_reminders.append({
-            'id': t.id,
-            'task': t.task_name,
-            'task_time': t.task_time,
-            'task_date': t.task_date,
-            'reminder_type': t.reminder_type,
-            'created_at': t.created_at,
-            'type': 'addtask'
-        })
-
-    # Sort by date and time
-    all_reminders.sort(key=lambda x: (x['task_date'], x['task_time']))
-
-    return render(request, 'view_reminders.html', {
-        'reminders': all_reminders
+    active = Reminder.objects.filter(user=request.user, is_completed=False).order_by('reminder_date', 'reminder_time')
+    done = Reminder.objects.filter(user=request.user, is_completed=True).order_by('-created_at')[:10]
+    return render(request, 'reminders.html', {
+        'reminders': active, 
+        'completed': done, 
+        'mode': 'view'
     })
 
+
 @login_required
-def voice_assistant(request):
-    return render(request, 'voice_assistant.html')
+def snooze_reminder(request, pk, minutes):
+    r = get_object_or_404(Reminder, pk=pk, user=request.user)
+    r.is_snoozed = True
+    r.snooze_until = timezone.now() + timezone.timedelta(minutes=int(minutes))
+    r.save()
+    return JsonResponse({'status': 'snoozed'})
 
-@csrf_exempt
+
 @login_required
-def process_voice_command(request):
-    print(f"Voice command request method: {request.method}")
-    print(f"User: {request.user}")
-    print(f"Request body: {request.body}")
+def cancel_reminder(request, pk):
+    r = get_object_or_404(Reminder, pk=pk, user=request.user)
+    r.is_completed = True
+    r.save()
+    return JsonResponse({'status': 'cancelled'})
 
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            command = data.get('command', '').strip()
-            print(f"Voice command received: '{command}'")
 
-            # Always create a reminder - super simple
-            from datetime import datetime, timedelta
-            now = datetime.now()
+@login_required
+def complete_reminder(request, pk):
+    r = get_object_or_404(Reminder, pk=pk, user=request.user)
+    r.is_completed = True
+    r.save()
+    return JsonResponse({'status': 'completed'})
 
-            task = AddTask(
-                user=request.user,
-                task_name=command or 'Voice reminder',
-                task_time=(now + timedelta(hours=1)).time(),
-                task_date=now.date(),
-                reminder_type='Once'
-            )
-            task.save()
-            print(f"Successfully created task: {task}")
 
-            return JsonResponse({
-                'success': True,
-                'message': f'Reminder created: {task.task_name}'
-            })
+# ==================== Voice Assistant ====================
 
-        except Exception as e:
-            print(f"Critical error in voice command processing: {e}")
-            import traceback
-            traceback.print_exc()
-            return JsonResponse({'success': False, 'error': f'Server error: {str(e)}'})
+# ==================== Voice Assistant (ARIA) ====================
 
-    return JsonResponse({'success': False, 'error': 'Method not allowed'})
-
-def parse_voice_command(command):
+# ── Build dynamic app context for the AI ─────────────────────────────────────
+def get_app_context(user):
     """
-    Parse natural language voice commands to extract reminder details.
-    Ultra-simplified and bulletproof parsing.
+    Returns a real-time snapshot of the user's data.
+    This is injected into the AI system prompt so it knows
+    the actual state of the user's app — making responses
+    feel personal and accurate, not generic.
+    """
+    today = timezone.now().date()
+    now = timezone.now()
+
+    # Reminders
+    active_reminders = Reminder.objects.filter(
+        user=user, is_completed=False
+    ).order_by('reminder_date', 'reminder_time')[:5]
+    reminders_text = "\n".join(
+        f"  - '{r.task}' at {r.reminder_time.strftime('%I:%M %p')} on {r.reminder_date.strftime('%b %d')}"
+        for r in active_reminders
+    ) or "  (no active reminders)"
+
+    # Inventory alerts
+    expiring = InventoryItem.objects.filter(
+        user=user,
+        expiration_date__gte=today,
+        expiration_date__lte=today + timezone.timedelta(days=3)
+    )
+    expired = InventoryItem.objects.filter(
+        user=user, expiration_date__lt=today
+    )
+    low_stock = [i for i in InventoryItem.objects.filter(user=user) if i.is_low_stock()]
+
+    inventory_alerts = []
+    if expired.exists():
+        inventory_alerts.append(f"EXPIRED (remove these): {', '.join(i.name for i in expired[:3])}")
+    if expiring.exists():
+        inventory_alerts.append(f"Expiring in 3 days: {', '.join(i.name for i in expiring[:3])}")
+    if low_stock:
+        inventory_alerts.append(f"Low stock: {', '.join(i.name for i in low_stock[:3])}")
+
+    # Grocery list
+    try:
+        grocery = GroceryList.objects.get(user=user, is_completed=False)
+        pending = [i for i in grocery.items if not i.get('purchased')]
+        grocery_text = f"{len(pending)} items pending: {', '.join(i['name'] for i in pending[:4])}" if pending else "empty"
+    except GroceryList.DoesNotExist:
+        grocery_text = "no active list"
+
+    # User preferences
+    try:
+        prefs = user.preferences
+        diet = prefs.get_dietary_preference_display()
+        skill = prefs.get_cooking_skill_display()
+        allergies = prefs.get_allergies_list()
+    except:
+        diet, skill, allergies = "None", "Beginner", []
+
+    return f"""
+CURRENT USER DATA (as of {now.strftime('%A, %B %d %Y at %I:%M %p')}):
+User: {user.name or user.email}
+Dietary preference: {diet}
+Cooking skill: {skill}
+Allergies: {', '.join(allergies) if allergies else 'none'}
+
+Active reminders:
+{reminders_text}
+
+Inventory alerts:
+{chr(10).join('  - ' + a for a in inventory_alerts) if inventory_alerts else '  - All good, no alerts'}
+
+Grocery list: {grocery_text}
+
+Available app pages: Dashboard (/), Reminders (/view_reminders/), 
+Create Reminder (/create-reminder/), Inventory (/inventory/), 
+Recipes (/recipes/), Recipe Suggestions (/recipes/suggest/),
+Grocery List (/grocery/), Voice Assistant (/voice/), Preferences (/preferences/)
+"""
+
+
+# ── System prompt — this is what makes it human-like ─────────────────────────
+def build_system_prompt(user):
+    app_context = get_app_context(user)
+
+    return f"""You are ARIA (Adaptive Reminder & Intelligence Assistant), the smart voice assistant built into RemindHer — a personal kitchen and life management app. 
+
+PERSONALITY:
+- Warm, friendly, and conversational — like a knowledgeable friend, not a robot
+- Concise but natural — keep spoken responses under 3 sentences unless explaining something complex
+- Proactive — if you notice expiring items or upcoming reminders, mention them naturally
+- Helpful with anything — you can answer general knowledge questions, have small talk, tell jokes, help with math, give advice, explain concepts, etc.
+- Never say "I cannot" or "I am not able to" — always try to help in some way
+
+VOICE RESPONSE RULES (critical — you are being spoken aloud):
+- Never use markdown, bullet points, asterisks, hashtags, or formatting symbols in responses
+- Never start with "Certainly!" or "Of course!" or "Great question!" — just answer naturally
+- Use natural speech patterns: contractions (I'm, you've, let's), pauses implied by commas
+- For lists, say them naturally: "You have three things: milk, eggs, and tomatoes"
+- Keep responses SHORT for simple requests — one sentence is often perfect
+- For navigation requests, confirm briefly: "Sure, taking you there now"
+
+APP ACTIONS (return these in your response JSON):
+When the user wants to navigate or do something in the app, include an action in your response.
+Available actions:
+- navigate: go to a page  → {{"action": "navigate", "url": "/path/"}}
+- create_reminder: open reminder form → {{"action": "navigate", "url": "/create-reminder/"}}
+- show_alert: show a notification → {{"action": "alert", "message": "..."}}
+- none: just respond verbally → {{"action": null}}
+
+RESPONSE FORMAT (always return valid JSON):
+{{
+  "message": "Your natural spoken response here",
+  "action": "navigate" | "alert" | null,
+  "url": "/path/" | null,
+  "data": {{}} | null
+}}
+
+{app_context}
+
+EXAMPLES OF NATURAL RESPONSES:
+User: "what's up?" → {{"message": "Not much! You've got 2 reminders coming up and some tomatoes expiring tomorrow. Anything I can help with?", "action": null, "url": null, "data": null}}
+User: "remind me to call mom at 5pm" → {{"message": "Got it! Let me open the reminder form for you.", "action": "navigate", "url": "/create-reminder/", "data": null}}
+User: "what can I cook tonight?" → {{"message": "Based on what you have, I'd check the recipe suggestions — there might be something using those expiring tomatoes.", "action": "navigate", "url": "/recipes/suggest/", "data": null}}
+User: "what's the capital of France?" → {{"message": "Paris! One of the most beautiful cities in the world.", "action": null, "url": null, "data": null}}
+User: "tell me a joke" → {{"message": "Why did the chef get arrested? Because he was caught beating an egg.", "action": null, "url": null, "data": null}}
+"""
+
+
+# ── Conversation history store (use Django cache or session in production) ────
+# Simple in-memory store keyed by user ID — replace with Redis/cache for production
+_conversation_histories = {}
+
+def get_conversation_history(user_id):
+    return _conversation_histories.get(user_id, [])
+
+def save_conversation_history(user_id, history):
+    # Keep last 20 messages to manage token usage
+    _conversation_histories[user_id] = history[-20:]
+
+def clear_conversation_history(user_id):
+    _conversation_histories.pop(user_id, None)
+
+
+# ── Main AI chat endpoint ─────────────────────────────────────────────────────
+@login_required
+@require_POST
+def voice_chat(request):
+    """
+    The intelligent voice endpoint.
+    Uses ARIA Brain - a self-contained AI that runs 100% locally.
+    No external API needed - uses keyword matching and templates.
     """
     try:
-        from datetime import datetime, timedelta
+        body = json.loads(request.body)
+        user_message = body.get('message', '').strip()
+        clear = body.get('clear_history', False)
 
-        print(f"Parsing command: '{command}'")
+        if not user_message:
+            return JsonResponse({'error': 'No message provided'}, status=400)
 
-        # Default values - always valid
-        now = datetime.now()
-        task_time = (now + timedelta(hours=1)).time()  # 1 hour from now
-        task_date = now.date()  # Today
-        reminder_type = 'Once'
-        task_text = "Custom reminder"
+        if clear:
+            clear_context(request.user.id)
+            return JsonResponse({'message': "Sure, fresh start!", 'action': None, 'url': None, 'data': None})
 
-        # Check for daily keywords
-        if any(word in command.lower() for word in ['daily', 'every day', 'each day', 'everyday']):
-            reminder_type = 'Daily'
-
-        # Simple time extraction - look for patterns like "5 PM", "3:30 PM", "8 AM"
-        time_match = re.search(r'(\d{1,2})(?::(\d{2}))?\s*(am|pm|AM|PM)?', command, re.IGNORECASE)
-        if time_match:
-            hour = int(time_match.group(1))
-            minute = int(time_match.group(2)) if time_match.group(2) else 0
-            ampm = time_match.group(3).lower() if time_match.group(3) else None
-
-            # Convert to 24-hour format
-            if ampm == 'pm' and hour != 12:
-                hour += 12
-            elif ampm == 'am' and hour == 12:
-                hour = 0
-            elif not ampm and hour <= 12:  # Assume PM for afternoon hours
-                if hour < 8:
-                    hour += 12
-
-            # Validate hour
-            if 0 <= hour <= 23:
-                task_time = datetime.strptime(f"{hour}:{minute}", "%H:%M").time()
-                print(f"Parsed time: {task_time}")
-
-        # Simple date extraction
-        cmd_lower = command.lower()
-        if 'tomorrow' in cmd_lower:
-            task_date = (now + timedelta(days=1)).date()
-        elif 'today' in cmd_lower:
-            task_date = now.date()
-
-        # Extract task - remove everything that looks like time/date/reminder words
-        task_text = command
-
-        # Remove time patterns
-        task_text = re.sub(r'\d{1,2}(?::\d{2})?\s*(am|pm|AM|PM)', '', task_text, flags=re.IGNORECASE)
-        task_text = re.sub(r'\d{1,2}\s*(am|pm|AM|PM)', '', task_text, flags=re.IGNORECASE)
-
-        # Remove common words
-        remove_patterns = [
-            r'\bremind\b', r'\bme\b', r'\bto\b', r'\bat\b', r'\bon\b', r'\bfor\b',
-            r'\bset\b', r'\ba\b', r'\bdaily\b', r'\bevery\b', r'\bday\b',
-            r'\btomorrow\b', r'\btoday\b', r'\bcreate\b', r'\breminder\b'
-        ]
-
-        for pattern in remove_patterns:
-            task_text = re.sub(pattern, '', task_text, flags=re.IGNORECASE)
-
-        # Clean up spaces
-        task_text = re.sub(r'\s+', ' ', task_text).strip()
-
-        # Final fallback
-        if not task_text or len(task_text) < 2:
-            # Use the original command but clean it minimally
-            task_text = re.sub(r'\d{1,2}(?::\d{2})?\s*(am|pm|AM|PM)', '', command, flags=re.IGNORECASE)
-            task_text = re.sub(r'\s+', ' ', task_text).strip()
-            if not task_text:
-                task_text = "Voice reminder"
-
-        print(f"Final result: task='{task_text}', time={task_time}, date={task_date}, type={reminder_type}")
-
-        return {
-            'task': task_text,
-            'time': task_time,
-            'date': task_date,
-            'type': reminder_type
-        }
+        # Process through ARIA brain — zero external API
+        result = process_message(user_message, request.user)
+        return JsonResponse(result)
 
     except Exception as e:
-        print(f"Critical parsing error: {e}")
-        # Ultimate fallback - always return valid data
-        now = datetime.now()
-        return {
-            'task': 'Voice reminder',
-            'time': (now + timedelta(hours=1)).time(),
-            'date': now.date(),
-            'type': 'Once'
-        }
+        print(f'[ARIA Error] {e}')
+        return JsonResponse({
+            'message': 'Something went wrong. Please try again.',
+            'action': None, 'url': None, 'data': None
+        }, status=500)
 
-# # New view for voice questionnaire@login_required
+
+# ── Clear conversation endpoint ───────────────────────────────────────────────
+@login_required
+@require_POST
+def voice_clear_history(request):
+    clear_context(request.user.id)
+    return JsonResponse({'status': 'cleared'})
+
+
+# ── Voice page view ───────────────────────────────────────────────────────────
+@login_required
+def voice_assistant_page(request):
+    quick_commands = [
+        "What's up?",
+        "What can I cook tonight?",
+        "Any expiring items?",
+        "Set a reminder",
+        "Show my grocery list",
+        "What time is it?",
+        "Tell me a joke",
+        "Open inventory",
+    ]
+    return render(request, 'voice_assistant.html', {
+        'quick_commands': quick_commands
+    })
+
+
+# ==================== Inventory Views ====================
 
 @login_required
-@csrf_exempt
-def start_questionnaire(request):
-    print("START: Entering start_questionnaire")
-    print(f"Method: {request.method}")
-    
-    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
-    print(f"AJAX: {is_ajax}")
-    
-    if is_ajax and request.method == 'POST':
-        print(f"User ID: {request.user.id}")
-        try:
-            data = json.loads(request.body)
-            responses = data.get('responses', {})
-            print(f"Received: {responses}")
-            
-            task_name = responses.get("What is the task name?", "Unnamed Task")
-            task_time_str = responses.get("At what time should I remind you?", "10:00 PM")
-            task_date_str = responses.get("On which date should I remind you?", "today")
-            reminder_type = responses.get("Should I remind you once or daily?", "Once")
-            
-            task_name = "Unnamed Task" if task_name == "No response" else task_name
-            task_time_str = "10:00 PM" if task_time_str == "No response" else task_time_str
-            task_date_str = "today" if task_date_str == "No response" else task_date_str
-            reminder_type = "Once" if reminder_type == "No response" else reminder_type
-            
-            print(f"Processed: Name={task_name}, Time={task_time_str}, Date={task_date_str}, Type={reminder_type}")
-            
-            # Parse time with better settings for Indian users
-            task_time_parsed = parse(task_time_str, settings={
-                'TIMEZONE': 'Asia/Kolkata',  # IST timezone
-                'RETURN_AS_TIMEZONE_AWARE': False
-            })
-            if task_time_parsed:
-                task_time = task_time_parsed.time()
-            else:
-                # Fallback to current time + 1 hour
-                from datetime import datetime, timedelta
-                task_time = (datetime.now() + timedelta(hours=1)).time()
-
-            # Parse date with better settings
-            task_date_parsed = parse(task_date_str, settings={
-                'PREFER_DATES_FROM': 'future',
-                'DATE_ORDER': 'DMY',  # Day-Month-Year for Indian format
-                'TIMEZONE': 'Asia/Kolkata'
-            })
-            if task_date_parsed:
-                task_date = task_date_parsed.date()
-            else:
-                # Fallback to tomorrow
-                task_date = (datetime.now() + timedelta(days=1)).date()
-
-            reminder_type = reminder_type.capitalize() if reminder_type.capitalize() in ['Once', 'Daily'] else 'Once'
-            
-            task = AddTask(
-                user=request.user,
-                task_name=task_name[:255],
-                task_time=task_time,
-                task_date=task_date,
-                reminder_type=reminder_type
-            )
-            task.save()
-            print(f"Saved: {task}")
-            
-            return JsonResponse({
-                'message': 'Task added successfully',
-                'task_id': task.id
-            }, status=200)
-        except Exception as e:
-            print(f"Error: {e}")
-            return JsonResponse({'message': 'Error adding task', 'error': str(e)}, status=200)
-    
-    print("Rendering questionnaire.html")
-    return render(request, 'questionnaire.html')
-
-
-# from django.contrib.auth import authenticate, login
-# from django.shortcuts import render, redirect
-# from rest_framework.response import Response
-# from rest_framework.views import APIView
-# from rest_framework import status
-# from .models import User, Reminder
-# from .serializers import UserSerializer
-# from rest_framework.parsers import JSONParser, FormParser
-# from django.contrib.auth.decorators import login_required
-# import speech_recognition as sr
-# import pyttsx3
-# import dateparser
-# from datetime import datetime, timedelta
-# from celery import shared_task
-# from django_celery_beat.models import PeriodicTask, CrontabSchedule
-# import json
-# from django.http import HttpResponse, JsonResponse
-# import threading
-
-# # Initialize speech recognition and TTS with a lock
-# listener = sr.Recognizer()
-# engine = pyttsx3.init()
-# voices = engine.getProperty('voices')
-# engine.setProperty('voice', voices[1].id)
-# speech_lock = threading.Lock()  # Lock to synchronize speech
-
-# listener.dynamic_energy_threshold = True
-# listener.energy_threshold = 300
-# listener.pause_threshold = 0.8
-# listener.phrase_time_limit = 8
-# listener.non_speaking_duration = 0.5
-
-# def talk(text):
-#     with speech_lock:  # Ensure only one speech at a time
-#         engine.say(text)
-#         engine.runAndWait()
-
-# def take_command(prompt, expected_type="text"):
-#     while True:
-#         talk(prompt)
-#         print(prompt)
-#         try:
-#             with sr.Microphone() as source:
-#                 listener.adjust_for_ambient_noise(source, duration=2)
-#                 print("Listening...")
-#                 voice = listener.listen(source)
-#                 command = listener.recognize_google(voice, language='en-US').lower()
-#                 print(f"User said: {command}")
-
-#                 if expected_type == "time":
-#                     parsed = dateparser.parse(command, settings={'TIMEZONE': 'UTC'})
-#                     return parsed.time() if parsed else None
-#                 elif expected_type == "date":
-#                     parsed = dateparser.parse(command, settings={'PREFER_DATES_FROM': 'future'})
-#                     return parsed.date() if parsed else None
-#                 elif expected_type == "text":
-#                     return command
-#         except sr.UnknownValueError:
-#             talk("Sorry, I didn't catch that. Please repeat.")
-#         except Exception as e:
-#             print(f"Error: {e}")
-#         talk("Please try again.")
-
-# class RegisterView(APIView):
-#     def post(self, request):
-#         serializer = UserSerializer(data=request.data)
-#         if serializer.is_valid():
-#             serializer.save()
-#             return Response({'message': 'User registered successfully'}, status=status.HTTP_201_CREATED)
-#         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-
-# class LoginView(APIView):
-#     def post(self, request):
-#         email = request.data.get('email')
-#         password = request.data.get('password')
-
-#         try:
-#             user = User.objects.get(email=email)
-#         except User.DoesNotExist:
-#             return Response({'error': 'User not registered'}, status=status.HTTP_400_BAD_REQUEST)
-
-#         if not user.check_password(password):
-#             return Response({'error': 'Invalid credentials'}, status=status.HTTP_400_BAD_REQUEST)
-
-#         if user.status != 'Active':
-#             return Response({'error': 'Account is inactive'}, status=status.HTTP_400_BAD_REQUEST)
-
-#         login(request, user)
-#         return Response({'message': 'Login successful'}, status=status.HTTP_200_OK)
-
-# def Login_view(request):
-#     return render(request, 'Login.html')
-
-# def Register_view(request):
-#     return render(request, 'Register.html')
-
-# def splashscreen(request):
-#     return render(request, 'splashscreen.html')
-
-# @login_required
-# def create_reminder(request):
-
-# Inventory Management Views
-@login_required
-def inventory_list(request):
+def inventory(request):
     items = InventoryItem.objects.filter(user=request.user)
-    return render(request, 'inventory.html', {'items': items})
+    today = timezone.now().date()
+    return render(request, 'inventory.html', {
+        'items': items,
+        'expiring_soon': items.filter(expiration_date__gte=today, expiration_date__lte=today+timezone.timedelta(days=3)),
+        'expired': items.filter(expiration_date__lt=today),
+        'low_stock': [i for i in items if i.is_low_stock()],
+        'categories': ['fridge', 'pantry', 'freezer', 'spices', 'other']
+    })
+
 
 @login_required
-@csrf_exempt
-def add_inventory_item(request):
+def inventory_add(request):
     if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            name = data.get('name')
-            quantity = data.get('quantity', 1)
-            unit = data.get('unit', 'pieces')
-            category = data.get('category', 'Other')
-            expiration_date = data.get('expiration_date')
-            low_stock_threshold = data.get('low_stock_threshold', 1)
+        data = json.loads(request.body)
+        item = InventoryItem.objects.create(
+            user=request.user,
+            name=data.get('name'),
+            quantity=data.get('quantity', 1.0),
+            unit=data.get('unit', 'pieces'),
+            category=data.get('category', 'pantry'),
+            low_stock_threshold=data.get('low_stock_threshold', 1.0),
+            expiration_date=data.get('expiration_date') or None
+        )
+        return JsonResponse({'status': 'ok', 'id': item.id})
+    return JsonResponse({'status': 'error'}, status=400)
 
-            if not name:
-                return JsonResponse({'error': 'Item name is required'}, status=400)
-
-            item = InventoryItem.objects.create(
-                user=request.user,
-                name=name,
-                quantity=quantity,
-                unit=unit,
-                category=category,
-                expiration_date=expiration_date if expiration_date else None,
-                low_stock_threshold=low_stock_threshold
-            )
-
-            return JsonResponse({
-                'message': 'Item added successfully',
-                'item_id': item.id,
-                'name': item.name,
-                'quantity': str(item.quantity),
-                'unit': item.unit
-            })
-
-        except json.JSONDecodeError:
-            return JsonResponse({'error': 'Invalid JSON data'}, status=400)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @login_required
-@csrf_exempt
-def update_inventory_item(request, item_id):
-    try:
-        item = InventoryItem.objects.get(id=item_id, user=request.user)
-    except InventoryItem.DoesNotExist:
-        return JsonResponse({'error': 'Item not found'}, status=404)
-
+def inventory_update(request, pk):
+    item = get_object_or_404(InventoryItem, pk=pk, user=request.user)
     if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            item.name = data.get('name', item.name)
-            item.quantity = data.get('quantity', item.quantity)
-            item.unit = data.get('unit', item.unit)
-            item.category = data.get('category', item.category)
-            expiration_date = data.get('expiration_date')
-            item.expiration_date = expiration_date if expiration_date else None
-            item.low_stock_threshold = data.get('low_stock_threshold', item.low_stock_threshold)
-            item.save()
+        data = json.loads(request.body)
+        item.name = data.get('name', item.name)
+        item.quantity = data.get('quantity', item.quantity)
+        item.unit = data.get('unit', item.unit)
+        item.category = data.get('category', item.category)
+        item.expiration_date = data.get('expiration_date') or item.expiration_date
+        item.low_stock_threshold = data.get('low_stock_threshold', item.low_stock_threshold)
+        item.save()
+        return JsonResponse({'status': 'ok'})
+    return JsonResponse({'status': 'error'}, status=400)
 
-            return JsonResponse({
-                'message': 'Item updated successfully',
-                'item_id': item.id,
-                'name': item.name,
-                'quantity': str(item.quantity),
-                'unit': item.unit
-            })
-
-        except json.JSONDecodeError:
-            return JsonResponse({'error': 'Invalid JSON data'}, status=400)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 @login_required
-@csrf_exempt
-def delete_inventory_item(request, item_id):
-    try:
-        item = InventoryItem.objects.get(id=item_id, user=request.user)
-        item.delete()
-        return JsonResponse({'message': 'Item deleted successfully'})
-    except InventoryItem.DoesNotExist:
-        return JsonResponse({'error': 'Item not found'}, status=404)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+def inventory_delete(request, pk):
+    item = get_object_or_404(InventoryItem, pk=pk, user=request.user)
+    item.delete()
+    return JsonResponse({'status': 'deleted'})
+
 
 @login_required
-def get_inventory_alerts(request):
-    expired_items = InventoryItem.objects.filter(
-        user=request.user,
-        expiration_date__lt=datetime.now().date()
-    )
-    low_stock_items = InventoryItem.objects.filter(
-        user=request.user,
-        quantity__lte=models.F('low_stock_threshold')
-    )
-
+def inventory_alerts(request):
+    today = timezone.now().date()
     alerts = []
-    for item in expired_items:
-        alerts.append({
-            'type': 'expired',
-            'item': item.name,
-            'message': f'{item.name} has expired'
-        })
-    for item in low_stock_items:
-        alerts.append({
-            'type': 'low_stock',
-            'item': item.name,
-            'message': f'{item.name} is running low ({item.quantity} {item.unit} remaining)'
-        })
+    for item in InventoryItem.objects.filter(user=request.user):
+        if item.is_expired():
+            alerts.append({'type': 'expired', 'name': item.name, 'id': item.id})
+        elif item.days_until_expiry() is not None and item.days_until_expiry() <= 3:
+            alerts.append({'type': 'expiring', 'name': item.name, 'days': item.days_until_expiry(), 'id': item.id})
+        if item.is_low_stock():
+            alerts.append({'type': 'low_stock', 'name': item.name, 'id': item.id})
+    return JsonResponse({'alerts': alerts, 'count': len(alerts)})
 
-    return JsonResponse({'alerts': alerts})
 
-# Voice command processing for inventory
-@login_required
-@csrf_exempt
-def process_voice_command(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            command = data.get('command', '').lower().strip()
-
-            if not command:
-                return JsonResponse({'error': 'No command provided'}, status=400)
-
-            # Parse inventory commands
-            if 'add' in command and 'inventory' in command:
-                # Extract item details from command
-                # This is a simple parser - can be enhanced with NLP
-                parts = command.replace('add to inventory', '').replace('add', '').strip().split()
-                if len(parts) >= 2:
-                    quantity = parts[0]
-                    unit = parts[1] if len(parts) > 2 else 'pieces'
-                    name = ' '.join(parts[1:]) if len(parts) > 2 else parts[1]
-
-                    try:
-                        quantity = float(quantity)
-                        item = InventoryItem.objects.create(
-                            user=request.user,
-                            name=name,
-                            quantity=quantity,
-                            unit=unit
-                        )
-                        return JsonResponse({
-                            'message': f'Added {quantity} {unit} of {name} to inventory',
-                            'item_id': item.id
-                        })
-                    except ValueError:
-                        return JsonResponse({'error': 'Could not parse quantity'}, status=400)
-
-            elif 'remove' in command or 'used' in command:
-                # Parse removal commands
-                parts = command.replace('remove from inventory', '').replace('used', '').replace('remove', '').strip().split()
-                if parts:
-                    name = ' '.join(parts)
-                    items = InventoryItem.objects.filter(user=request.user, name__icontains=name)
-                    if items.exists():
-                        item = items.first()
-                        item.delete()
-                        return JsonResponse({'message': f'Removed {item.name} from inventory'})
-                    else:
-                        return JsonResponse({'error': f'Item {name} not found in inventory'}, status=404)
-
-            return JsonResponse({'message': 'Command processed', 'command': command})
-
-        except json.JSONDecodeError:
-            return JsonResponse({'error': 'Invalid JSON data'}, status=400)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-# Recipe Management Views
-@login_required
-def recipe_list(request):
-    recipes = Recipe.objects.all()  # In a real app, filter by user preferences
-    return render(request, 'recipes.html', {'recipes': recipes})
+# ==================== Recipe Views ====================
 
 @login_required
-def suggest_recipes(request):
-    # Get user's inventory
-    user_inventory = InventoryItem.objects.filter(user=request.user).values_list('name', flat=True)
+def recipes(request):
+    all_recipes = Recipe.objects.all()
+    return render(request, 'recipes.html', {'recipes': all_recipes})
 
-    # Simple recipe suggestion based on available ingredients
-    # In a real app, this would be more sophisticated
+
+@login_required
+def recipe_suggestions(request):
+    inventory = list(InventoryItem.objects.filter(user=request.user))
+    inv_names = {i.name.lower() for i in inventory}
+    today = timezone.now().date()
+    expiring = {i.name.lower() for i in inventory if i.expiration_date and (i.expiration_date - today).days <= 3}
+
+    try:
+        prefs = request.user.preferences
+        dietary = prefs.dietary_preference
+        allergies = prefs.get_allergies_list()
+    except:
+        dietary, allergies = 'none', []
+
     recipes = Recipe.objects.all()
-    suggestions = []
+    if dietary != 'none':
+        recipes = recipes.filter(dietary_tags__icontains=dietary)
+    for allergy in allergies:
+        recipes = recipes.exclude(ingredients__icontains=allergy)
 
+    scored = []
     for recipe in recipes:
-        ingredients = recipe.ingredients if isinstance(recipe.ingredients, list) else []
-        available_ingredients = [ing for ing in ingredients if any(inv_item.lower() in ing.lower() or ing.lower() in inv_item.lower() for inv_item in user_inventory)]
-        if len(available_ingredients) >= len(ingredients) * 0.5:  # At least 50% ingredients available
-            suggestions.append({
-                'recipe': recipe,
-                'match_percentage': len(available_ingredients) / len(ingredients) * 100,
-                'available_ingredients': available_ingredients,
-                'missing_ingredients': [ing for ing in ingredients if ing not in available_ingredients]
-            })
-
-    # Sort by match percentage
-    suggestions.sort(key=lambda x: x['match_percentage'], reverse=True)
-
-    return render(request, 'recipe_suggestions.html', {'suggestions': suggestions[:10]})  # Top 10 suggestions
-
-@login_required
-def start_cooking_session(request, recipe_id):
-    try:
-        recipe = Recipe.objects.get(id=recipe_id)
-        # End any existing session
-        CookingSession.objects.filter(user=request.user, completed_at__isnull=True).update(completed_at=datetime.now())
-
-        # Start new session
-        session = CookingSession.objects.create(user=request.user, recipe=recipe)
-        return redirect('cooking_session', session_id=session.id)
-    except Recipe.DoesNotExist:
-        return JsonResponse({'error': 'Recipe not found'}, status=404)
-
-@login_required
-def cooking_session(request, session_id):
-    try:
-        session = CookingSession.objects.get(id=session_id, user=request.user)
-        recipe = session.recipe
-        instructions = recipe.instructions if isinstance(recipe.instructions, list) else []
-
-        return render(request, 'cooking_session.html', {
-            'session': session,
+        ingredient_names = {i['name'].lower() for i in recipe.ingredients} if recipe.ingredients else set()
+        if not ingredient_names:
+            continue
+        matched = inv_names & ingredient_names
+        score = (len(matched) / len(ingredient_names)) * 100
+        score += len(expiring & matched) * 15  # bonus for expiring
+        scored.append({
             'recipe': recipe,
-            'instructions': instructions,
-            'current_step': session.current_step
+            'score': round(score),
+            'matched': len(matched),
+            'total': len(ingredient_names),
+            'missing': list(ingredient_names - inv_names),
+            'uses_expiring': list(expiring & matched)
         })
-    except CookingSession.DoesNotExist:
-        return JsonResponse({'error': 'Cooking session not found'}, status=404)
+
+    scored.sort(key=lambda x: x['score'], reverse=True)
+    return render(request, 'recipe_suggestions.html', {'suggestions': scored[:10]})
+
+
+# ==================== Cooking Session Views ====================
 
 @login_required
-@csrf_exempt
-def update_cooking_step(request, session_id):
-    try:
-        session = CookingSession.objects.get(id=session_id, user=request.user)
-        if request.method == 'POST':
-            data = json.loads(request.body)
-            step = data.get('step', session.current_step)
-            session.current_step = step
-            if step >= len(session.recipe.instructions):
-                session.completed_at = datetime.now()
-            session.save()
+def start_cooking(request, recipe_id):
+    recipe = get_object_or_404(Recipe, id=recipe_id)
+    # End any active sessions
+    CookingSession.objects.filter(user=request.user, is_completed=False).update(is_completed=True)
+    session = CookingSession.objects.create(
+        user=request.user,
+        recipe=recipe,
+        current_step=0,
+        total_steps=len(recipe.instructions) if recipe.instructions else 0
+    )
+    return redirect('cooking_session', pk=session.id)
 
-            return JsonResponse({
-                'message': 'Step updated',
-                'current_step': session.current_step,
-                'completed': session.completed_at is not None
-            })
-    except CookingSession.DoesNotExist:
-        return JsonResponse({'error': 'Session not found'}, status=404)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
 
 @login_required
-@csrf_exempt
-def set_cooking_timer(request, session_id):
-    try:
-        session = CookingSession.objects.get(id=session_id, user=request.user)
-        if request.method == 'POST':
-            data = json.loads(request.body)
-            timer_name = data.get('name', 'Timer')
-            duration_minutes = data.get('duration', 5)
+def cooking_session_view(request, pk):
+    session = get_object_or_404(CookingSession, pk=pk, user=request.user)
+    instructions = session.recipe.instructions
+    current = instructions[session.current_step] if session.current_step < len(instructions) else None
+    return render(request, 'cooking_session.html', {
+        'session': session,
+        'recipe': session.recipe,
+        'current_step': current,
+        'instructions': instructions,
+        'step_number': session.current_step + 1,
+        'progress': session.get_progress_percentage()
+    })
 
-            # In a real app, you'd integrate with a timer system
-            # For now, just store in session
-            timers = session.timers or {}
-            timers[timer_name] = {
-                'duration': duration_minutes,
-                'started_at': datetime.now().isoformat()
-            }
-            session.timers = timers
-            session.save()
 
-            return JsonResponse({'message': f'Timer set for {duration_minutes} minutes'})
-    except CookingSession.DoesNotExist:
-        return JsonResponse({'error': 'Session not found'}, status=404)
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+@login_required
+def update_step(request, pk):
+    session = get_object_or_404(CookingSession, pk=pk, user=request.user)
+    data = json.loads(request.body)
+    direction = data.get('direction', 'next')
+    
+    if direction == 'next' and session.current_step < session.total_steps - 1:
+        session.current_step += 1
+    elif direction == 'prev' and session.current_step > 0:
+        session.current_step -= 1
+    
+    if session.current_step >= session.total_steps - 1:
+        session.is_completed = True
+        session.completed_at = timezone.now()
+    
+    session.save()
+    return JsonResponse({
+        'current_step': session.current_step,
+        'is_completed': session.is_completed,
+        'progress': session.get_progress_percentage()
+    })
 
-# Grocery List Management Views
+
+@login_required
+def set_timer(request, pk):
+    session = get_object_or_404(CookingSession, pk=pk, user=request.user)
+    minutes = int(json.loads(request.body).get('minutes', 5))
+    session.timer_end = timezone.now() + timezone.timedelta(minutes=minutes)
+    session.save()
+    return JsonResponse({'timer_end': session.timer_end.isoformat()})
+
+
+# ==================== Grocery List Views ====================
+
 @login_required
 def grocery_list_view(request):
-    try:
-        grocery_list = GroceryList.objects.filter(user=request.user, is_completed=False).first()
-        if not grocery_list:
-            grocery_list = GroceryList.objects.create(user=request.user)
-    except:
-        grocery_list = GroceryList.objects.create(user=request.user)
-
-    return render(request, 'grocery_list.html', {'grocery_list': grocery_list})
-
-@login_required
-@csrf_exempt
-def add_grocery_item(request):
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            item_name = data.get('name', '').strip()
-            quantity = data.get('quantity', 1)
-
-            if not item_name:
-                return JsonResponse({'error': 'Item name is required'}, status=400)
-
-            # Get or create grocery list
-            grocery_list, created = GroceryList.objects.get_or_create(
-                user=request.user,
-                is_completed=False,
-                defaults={'items': []}
-            )
-
-            items = grocery_list.items or []
-            # Check if item already exists
-            item_exists = False
-            for item in items:
-                if item.get('name', '').lower() == item_name.lower():
-                    item['quantity'] = item.get('quantity', 0) + quantity
-                    item_exists = True
-                    break
-
-            if not item_exists:
-                items.append({'name': item_name, 'quantity': quantity, 'completed': False})
-
-            grocery_list.items = items
-            grocery_list.save()
-
-            return JsonResponse({
-                'message': f'Added {quantity} {item_name} to grocery list',
-                'item_count': len(items)
-            })
-
-        except json.JSONDecodeError:
-            return JsonResponse({'error': 'Invalid JSON data'}, status=400)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
-
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-
-@login_required
-@csrf_exempt
-def update_grocery_item(request, item_index):
-    try:
-        grocery_list = GroceryList.objects.filter(user=request.user, is_completed=False).first()
-        if not grocery_list:
-            return JsonResponse({'error': 'No active grocery list found'}, status=404)
-
-        if request.method == 'POST':
-            data = json.loads(request.body)
-            completed = data.get('completed', False)
-
-            items = grocery_list.items or []
-            if 0 <= item_index < len(items):
-                items[item_index]['completed'] = completed
-                grocery_list.items = items
-                grocery_list.save()
-
-                return JsonResponse({'message': 'Item updated successfully'})
-            else:
-                return JsonResponse({'error': 'Item not found'}, status=404)
-
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-@login_required
-@csrf_exempt
-def delete_grocery_item(request, item_index):
-    try:
-        grocery_list = GroceryList.objects.filter(user=request.user, is_completed=False).first()
-        if not grocery_list:
-            return JsonResponse({'error': 'No active grocery list found'}, status=404)
-
-        items = grocery_list.items or []
-        if 0 <= item_index < len(items):
-            removed_item = items.pop(item_index)
-            grocery_list.items = items
-            grocery_list.save()
-
-            return JsonResponse({
-                'message': f'Removed {removed_item["name"]} from grocery list'
-            })
-        else:
-            return JsonResponse({'error': 'Item not found'}, status=404)
-
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-@login_required
-@csrf_exempt
-def complete_grocery_list(request):
-    try:
-        grocery_list = GroceryList.objects.filter(user=request.user, is_completed=False).first()
-        if grocery_list:
-            grocery_list.is_completed = True
-            grocery_list.save()
-
-            # Create new empty list
-            GroceryList.objects.create(user=request.user)
-
-            return JsonResponse({'message': 'Grocery list completed'})
-        else:
-            return JsonResponse({'error': 'No active grocery list found'}, status=404)
-
-    except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
-
-@login_required
-def get_grocery_suggestions(request):
-    from django.db.models import F
-    
-    # Suggest items based on low inventory
-    low_stock_items = InventoryItem.objects.filter(
+    grocery, _ = GroceryList.objects.get_or_create(
         user=request.user,
-        quantity__lte=F('low_stock_threshold')
-    ).values_list('name', flat=True)
+        is_completed=False,
+        defaults={'items': []}
+    )
+    low_stock = [i for i in InventoryItem.objects.filter(user=request.user) if i.is_low_stock()]
+    existing = {i['name'].lower() for i in grocery.items}
+    suggestions = [i for i in low_stock if i.name.lower() not in existing]
+    return render(request, 'grocery_list.html', {
+        'grocery': grocery,
+        'suggestions': suggestions
+    })
 
-    # Suggest items based on consumption patterns (simplified)
-    suggestions = list(low_stock_items)
-    
-    # Add default suggestions if no low-stock items
-    if not suggestions:
-        suggestions = [
-            'Milk', 'Bread', 'Eggs', 'Butter', 'Cheese',
-            'Chicken', 'Rice', 'Onions', 'Tomatoes', 'Potatoes',
-            'Salt', 'Sugar', 'Oil', 'Garlic', 'Green Vegetables'
-        ]
-    
-    return JsonResponse({'suggestions': suggestions})
 
 @login_required
-@csrf_exempt
-def create_grocery_reminder(request):
-    """Create a reminder for a grocery item"""
-    if request.method == 'POST':
-        try:
-            data = json.loads(request.body)
-            item_name = data.get('item_name', '').strip()
-            reminder_date = data.get('reminder_date')
-            reminder_time = data.get('reminder_time')
-            
-            if not item_name:
-                return JsonResponse({'error': 'Item name is required'}, status=400)
-            
-            if not reminder_date or not reminder_time:
-                return JsonResponse({'error': 'Date and time are required'}, status=400)
-            
-            # Parse the date and time
-            from datetime import datetime
-            try:
-                reminder_dt = datetime.strptime(f"{reminder_date} {reminder_time}", '%Y-%m-%d %H:%M')
-                task_date = reminder_dt.date()
-                task_time = reminder_dt.time()
-            except ValueError:
-                return JsonResponse({'error': 'Invalid date or time format'}, status=400)
-            
-            # Create the reminder
-            reminder = AddTask.objects.create(
-                user=request.user,
-                task_name=f"Buy {item_name}",
-                task_date=task_date,
-                task_time=task_time,
-                reminder_type='Once'
-            )
-            
-            return JsonResponse({
-                'message': f'Reminder set for {item_name} on {reminder_date} at {reminder_time}',
-                'reminder_id': reminder.id
-            })
-            
-        except json.JSONDecodeError:
-            return JsonResponse({'error': 'Invalid JSON data'}, status=400)
-        except Exception as e:
-            return JsonResponse({'error': str(e)}, status=500)
+def grocery_add(request):
+    data = json.loads(request.body)
+    grocery = GroceryList.objects.get(user=request.user, is_completed=False)
+    grocery.items.append({
+        'name': data.get('name'),
+        'quantity': data.get('quantity', ''),
+        'purchased': False
+    })
+    grocery.save()
+    return JsonResponse({'status': 'ok', 'items': grocery.items})
+
+
+@login_required
+def grocery_toggle(request, index):
+    grocery = GroceryList.objects.get(user=request.user, is_completed=False)
+    if 0 <= index < len(grocery.items):
+        grocery.items[index]['purchased'] = not grocery.items[index]['purchased']
+        grocery.save()
+    return JsonResponse({'status': 'ok'})
+
+
+@login_required
+def grocery_delete(request, index):
+    grocery = GroceryList.objects.get(user=request.user, is_completed=False)
+    if 0 <= index < len(grocery.items):
+        grocery.items.pop(index)
+        grocery.save()
+    return JsonResponse({'status': 'deleted'})
+
+
+@login_required
+def grocery_complete(request):
+    grocery = GroceryList.objects.get(user=request.user, is_completed=False)
+    grocery.is_completed = True
+    grocery.save()
+    # Create new empty grocery list
+    GroceryList.objects.create(user=request.user, name='Shopping List', items=[])
+    return JsonResponse({'status': 'completed'})
+
+
+# ==================== User Preferences ====================
+
+@login_required
+def user_preferences(request):
+    try:
+        prefs = request.user.preferences
+    except UserPreferences.DoesNotExist:
+        prefs = UserPreferences.objects.create(
+            user=request.user,
+            dietary_preference='none',
+            cooking_skill='beginner'
+        )
     
-    return JsonResponse({'error': 'Method not allowed'}, status=405)
-#     if request.method == "POST":
-#         task = request.POST.get('task')
-#         task_time_str = request.POST.get('task_time')
-#         task_date_str = request.POST.get('task_date')
-#         reminder_type = request.POST.get('reminder_type')
+    if request.method == 'POST':
+        prefs.dietary_preference = request.POST.get('dietary_preference', 'none')
+        prefs.allergies = request.POST.get('allergies', '')
+        prefs.cooking_skill = request.POST.get('cooking_skill', 'beginner')
+        prefs.voice_enabled = request.POST.get('voice_enabled') == 'on'
+        prefs.save()
+        messages.success(request, 'Preferences saved!')
+        return redirect('dashboard')
+    
+    return render(request, 'preferences.html', {'preferences': prefs})
 
-#         try:
-#             task_time = datetime.strptime(task_time_str, '%H:%M:%S').time()
-#         except ValueError:
-#             task_time = dateparser.parse(task_time_str).time() if task_time_str else None
 
-#         task_date = datetime.strptime(task_date_str, '%Y-%m-%d').date() if task_date_str else None
+# ==================== Landing (Legacy) ====================
 
-#         if not task_time or not task_date:
-#             return render(request, 'create_reminder.html', {
-#                 'error': 'Invalid time or date format. Please try again.',
-#                 'task': task, 'task_time': task_time_str, 'task_date': task_date_str, 'reminder_type': reminder_type
-#             })
-
-#         reminder = Reminder.objects.create(
-#             user=request.user,
-#             task=task,
-#             task_time=task_time,
-#             task_date=task_date,
-#             reminder_type=reminder_type
-#         )
-
-#         schedule_reminder(reminder)
-#         return JsonResponse({'message': 'Reminder set successfully', 'reminder_id': reminder.id})
-
-#     task = take_command("Hey, what's the task?", "text")
-#     task_time = take_command("At what time should I remind you?", "time")
-#     task_date = take_command("On which date should I remind you?", "date")
-#     reminder_type = take_command("Should I remind you once or daily?", "text")
-
-#     confirmation = f"Reminder set for '{task}' on {task_date.strftime('%B %d')} at {task_time.strftime('%I:%M %p')}, {reminder_type}."
-#     talk(confirmation)
-
-#     task_time_str = task_time.strftime('%H:%M:%S')
-#     task_date_str = task_date.strftime('%Y-%m-%d')
-
-#     return render(request, 'create_reminder.html', {
-#         'task': task, 'task_time': task_time_str, 'task_date': task_date_str, 'reminder_type': reminder_type
-#     })
-
-# @shared_task
-# def play_ringtone(reminder_id):
-#     from playsound import playsound
-#     reminder = Reminder.objects.get(id=reminder_id)
-#     playsound('static\images\marco.mp3')  # Replace with your ringtone file path
-#     # Note: Popup logic will be handled client-side or via a desktop client
-#     reminder.is_completed = True
-#     reminder.save()
-
-# def schedule_reminder(reminder):
-#     schedule, _ = CrontabSchedule.objects.get_or_create(
-#         minute=reminder.task_time.minute,
-#         hour=reminder.task_time.hour,
-#         day_of_month=reminder.task_date.day,
-#         month_of_year=reminder.task_date.month,
-#     )
-#     PeriodicTask.objects.create(
-#         crontab=schedule,
-#         name=f'reminder-{reminder.id}',
-#         task='RemindHer_app.views.play_ringtone',
-#         args=json.dumps([reminder.id]),
-#         one_off=reminder.reminder_type == 'Once'
-#     )
-
-# @login_required
-# def snooze_reminder(request, reminder_id, minutes):
-#     reminder = Reminder.objects.get(id=reminder_id, user=request.user)
-#     new_time = (datetime.combine(reminder.task_date, reminder.task_time) + timedelta(minutes=minutes)).time()
-#     reminder.task_time = new_time
-#     reminder.is_completed = False
-#     reminder.save()
-#     schedule_reminder(reminder)
-#     return JsonResponse({'message': 'Reminder snoozed'})
-
-# @login_required
-# def cancel_reminder(request, reminder_id):
-#     reminder = Reminder.objects.get(id=reminder_id, user=request.user)
-#     reminder.is_completed = True
-#     reminder.save()
-#     PeriodicTask.objects.filter(name=f'reminder-{reminder.id}').delete()
-#     return JsonResponse({'message': 'Reminder canceled'})
-
-# @login_required
-# def check_reminders(request):
-#     now = datetime.now()
-#     reminders = Reminder.objects.filter(
-#         user=request.user,
-#         task_date=now.date(),
-#         task_time__hour=now.hour,
-#         task_time__minute=now.minute,
-#         is_completed=False
-#     )
-#     if reminders.exists():
-#         reminder = reminders.first()
-#         return JsonResponse({
-#             'reminder': {'id': reminder.id, 'task': reminder.task}
-#         })
-#     return JsonResponse({'reminder': None})
-
+def landing(request):
+    if request.user.is_authenticated:
+        return redirect('dashboard')
+    return redirect('login')

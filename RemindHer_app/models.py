@@ -1,177 +1,176 @@
-from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
 from django.db import models
+from django.contrib.auth.models import AbstractBaseUser, BaseUserManager, PermissionsMixin
+from django.utils import timezone
 
-class UserManager(BaseUserManager):
-    def create_user(self, name, email, password=None):
-        if not email:
-            raise ValueError("Users must have an email address")
+
+class CustomUserManager(BaseUserManager):
+    def create_user(self, email, password=None, **extra):
         email = self.normalize_email(email)
-        user = self.model(name=name, email=email, status='Active')
+        user = self.model(email=email, **extra)
         user.set_password(password)
-        user.save(using=self._db)
+        user.save()
         return user
 
-    def create_superuser(self, name, email, password):
-        user = self.create_user(name, email, password)
-        user.is_superuser = True
-        user.is_staff = True
-        user.save(using=self._db)
-        return user
+    def create_superuser(self, email, password=None, **extra):
+        extra.setdefault('is_staff', True)
+        extra.setdefault('is_superuser', True)
+        return self.create_user(email, password, **extra)
 
-class User(AbstractBaseUser, PermissionsMixin):
-    STATUS_CHOICES = [('Active', 'Active'), ('Inactive', 'Inactive')]
 
-    id = models.AutoField(primary_key=True)
-    name = models.CharField(max_length=255)
+class CustomUser(AbstractBaseUser, PermissionsMixin):
     email = models.EmailField(unique=True)
-    password = models.CharField(max_length=255)
-    created_at = models.DateTimeField(auto_now_add=True)
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='Active')
-
+    name = models.CharField(max_length=100, blank=True)
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
+    date_joined = models.DateTimeField(default=timezone.now)
 
-    objects = UserManager()
+    USERNAME_FIELD = 'email'
+    REQUIRED_FIELDS = []
 
-    USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = ["name"]
+    objects = CustomUserManager()
 
     def __str__(self):
         return self.email
 
-# class VoiceResponse(models.Model):
-#     user = models.ForeignKey(User, on_delete=models.CASCADE)
-#     question = models.CharField(max_length=255)
-#     response = models.CharField(max_length=255)
-#     created_at = models.DateTimeField(auto_now_add=True)
-
-#     def __str__(self):
-#         return f"{self.question} - {self.response} by {self.user.email}"
 
 class Reminder(models.Model):
-    REMINDER_TYPES = [('Once', 'Once'), ('Daily', 'Daily')]
+    TYPE_CHOICES = [('once', 'Once'), ('daily', 'Daily')]
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='reminders')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='reminders')
     task = models.CharField(max_length=255)
-    task_time = models.TimeField()
-    task_date = models.DateField()
-    reminder_type = models.CharField(max_length=10, choices=REMINDER_TYPES, default='Once')
-    created_at = models.DateTimeField(auto_now_add=True)
+    reminder_time = models.TimeField()
+    reminder_date = models.DateField()
+    reminder_type = models.CharField(max_length=10, choices=TYPE_CHOICES, default='once')
     is_completed = models.BooleanField(default=False)
+    is_snoozed = models.BooleanField(default=False)
+    snooze_until = models.DateTimeField(null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.task} for {self.user.email} on {self.task_date} at {self.task_time}"
-    
+        return f"{self.task} for {self.user.email}"
 
-
-
-class AddTask(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    task_name = models.CharField(max_length=255)
-    task_time = models.TimeField()
-    task_date = models.DateField()
-    reminder_type = models.CharField(max_length=10, choices=[('Once', 'Once'), ('Daily', 'Daily')])
-    created_at = models.DateTimeField(auto_now_add=True)
-    is_completed = models.BooleanField(default=False)
-
-    def __str__(self):
-        return f"{self.task_name} for {self.user.email} on {self.task_date} at {self.task_time}"
 
 class UserPreferences(models.Model):
-    DIETARY_CHOICES = [
-        ('None', 'None'),
-        ('Vegetarian', 'Vegetarian'),
-        ('Vegan', 'Vegan'),
-        ('Keto', 'Keto'),
-        ('Paleo', 'Paleo'),
-        ('Gluten-Free', 'Gluten-Free'),
+    DIET_CHOICES = [
+        ('none', 'None'),
+        ('vegetarian', 'Vegetarian'),
+        ('vegan', 'Vegan'),
+        ('keto', 'Keto'),
+        ('paleo', 'Paleo'),
+        ('gluten_free', 'Gluten-Free')
+    ]
+    SKILL_CHOICES = [
+        ('beginner', 'Beginner'),
+        ('intermediate', 'Intermediate'),
+        ('advanced', 'Advanced')
     ]
 
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
-    dietary_preferences = models.CharField(max_length=20, choices=DIETARY_CHOICES, default='None')
-    allergies = models.TextField(blank=True, help_text="Comma-separated list of allergies")
-    cooking_skill_level = models.CharField(max_length=20, choices=[
-        ('Beginner', 'Beginner'),
-        ('Intermediate', 'Intermediate'),
-        ('Advanced', 'Advanced'),
-    ], default='Intermediate')
+    user = models.OneToOneField(CustomUser, on_delete=models.CASCADE, related_name='preferences')
+    dietary_preference = models.CharField(max_length=20, choices=DIET_CHOICES, default='none')
+    allergies = models.TextField(blank=True)
+    cooking_skill = models.CharField(max_length=20, choices=SKILL_CHOICES, default='beginner')
+    voice_enabled = models.BooleanField(default=True)
+
+    def get_allergies_list(self):
+        return [a.strip() for a in self.allergies.split(',') if a.strip()]
 
     def __str__(self):
         return f"Preferences for {self.user.email}"
 
+
 class InventoryItem(models.Model):
     CATEGORY_CHOICES = [
-        ('Fridge', 'Fridge'),
-        ('Pantry', 'Pantry'),
-        ('Freezer', 'Freezer'),
-        ('Spices', 'Spices'),
-        ('Other', 'Other'),
+        ('fridge', 'Fridge'),
+        ('pantry', 'Pantry'),
+        ('freezer', 'Freezer'),
+        ('spices', 'Spices'),
+        ('other', 'Other')
+    ]
+    UNIT_CHOICES = [
+        ('kg', 'kg'),
+        ('g', 'g'),
+        ('liters', 'liters'),
+        ('ml', 'ml'),
+        ('pieces', 'pieces'),
+        ('cups', 'cups'),
+        ('tbsp', 'tbsp'),
+        ('tsp', 'tsp')
     ]
 
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    name = models.CharField(max_length=255)
-    quantity = models.DecimalField(max_digits=10, decimal_places=2, default=1)
-    unit = models.CharField(max_length=50, default='pieces')  # e.g., kg, liters, pieces
-    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='Other')
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='inventory')
+    name = models.CharField(max_length=100)
+    quantity = models.FloatField(default=1.0)
+    unit = models.CharField(max_length=20, choices=UNIT_CHOICES, default='pieces')
+    category = models.CharField(max_length=20, choices=CATEGORY_CHOICES, default='pantry')
     expiration_date = models.DateField(null=True, blank=True)
-    added_date = models.DateTimeField(auto_now_add=True)
-    last_updated = models.DateTimeField(auto_now=True)
-    low_stock_threshold = models.DecimalField(max_digits=10, decimal_places=2, default=1)
+    low_stock_threshold = models.FloatField(default=1.0)
+    updated_at = models.DateTimeField(auto_now=True)
 
-    def __str__(self):
-        return f"{self.name} ({self.quantity} {self.unit}) - {self.user.email}"
-
-    @property
     def is_expired(self):
-        if self.expiration_date:
-            from django.utils import timezone
-            return self.expiration_date < timezone.now().date()
-        return False
+        return self.expiration_date and self.expiration_date < timezone.now().date()
 
-    @property
+    def days_until_expiry(self):
+        if self.expiration_date:
+            return (self.expiration_date - timezone.now().date()).days
+        return None
+
     def is_low_stock(self):
         return self.quantity <= self.low_stock_threshold
 
+    def __str__(self):
+        return f"{self.name} ({self.quantity} {self.unit})"
+
+
 class Recipe(models.Model):
     DIFFICULTY_CHOICES = [
-        ('Easy', 'Easy'),
-        ('Medium', 'Medium'),
-        ('Hard', 'Hard'),
+        ('easy', 'Easy'),
+        ('medium', 'Medium'),
+        ('hard', 'Hard')
     ]
 
-    name = models.CharField(max_length=255)
+    name = models.CharField(max_length=200)
     description = models.TextField(blank=True)
-    ingredients = models.JSONField(help_text="List of ingredients with quantities")
-    instructions = models.JSONField(help_text="Step-by-step instructions")
-    prep_time = models.PositiveIntegerField(help_text="Preparation time in minutes")
-    cook_time = models.PositiveIntegerField(help_text="Cooking time in minutes")
-    servings = models.PositiveIntegerField(default=4)
-    difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES, default='Medium')
-    nutritional_info = models.JSONField(blank=True, null=True, help_text="Calories, protein, carbs, etc.")
-    tags = models.JSONField(blank=True, null=True, help_text="Tags like 'vegan', 'quick', etc.")
-    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    ingredients = models.JSONField(default=list)
+    instructions = models.JSONField(default=list)
+    prep_time = models.IntegerField(default=0)
+    cook_time = models.IntegerField(default=0)
+    servings = models.IntegerField(default=2)
+    difficulty = models.CharField(max_length=10, choices=DIFFICULTY_CHOICES, default='medium')
+    dietary_tags = models.CharField(max_length=200, blank=True)
+    nutritional_info = models.JSONField(default=dict, blank=True)
+
+    def get_tags(self):
+        return [t.strip() for t in self.dietary_tags.split(',') if t.strip()]
 
     def __str__(self):
         return self.name
 
+
 class GroceryList(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
-    name = models.CharField(max_length=255, default="My Grocery List")
-    items = models.JSONField(default=list, help_text="List of items to buy with quantities")
-    created_at = models.DateTimeField(auto_now_add=True)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='grocery_lists')
+    name = models.CharField(max_length=100, default='Shopping List')
+    items = models.JSONField(default=list)
     is_completed = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
         return f"{self.name} - {self.user.email}"
 
+
 class CookingSession(models.Model):
-    user = models.ForeignKey(User, on_delete=models.CASCADE)
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE)
     recipe = models.ForeignKey(Recipe, on_delete=models.CASCADE)
+    current_step = models.IntegerField(default=0)
+    total_steps = models.IntegerField(default=0)
+    is_completed = models.BooleanField(default=False)
+    timer_end = models.DateTimeField(null=True, blank=True)
     started_at = models.DateTimeField(auto_now_add=True)
     completed_at = models.DateTimeField(null=True, blank=True)
-    current_step = models.PositiveIntegerField(default=1)
-    timers = models.JSONField(blank=True, null=True, help_text="Active timers for the session")
+
+    def get_progress_percentage(self):
+        if self.total_steps == 0:
+            return 0
+        return int((self.current_step / self.total_steps) * 100)
 
     def __str__(self):
         return f"Cooking {self.recipe.name} by {self.user.email}"

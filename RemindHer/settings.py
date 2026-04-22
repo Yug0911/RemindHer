@@ -28,7 +28,7 @@ DEBUG = True
 
 ALLOWED_HOSTS = ['*']
 
-AUTH_USER_MODEL = "RemindHer_app.User"
+AUTH_USER_MODEL = "RemindHer_app.CustomUser"
 
 # Login/Logout URLs
 LOGIN_URL = '/login/'
@@ -53,10 +53,26 @@ INSTALLED_APPS = [
     'RemindHer_app',
     'rest_framework',
 ]
-#Celery Settings
-CELERY_BROKER_URL = 'redis://localhost:6379/0'  # Update if using a different Redis instance
+# Celery Settings
+CELERY_BROKER_URL = 'redis://localhost:6379/0'
 CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
 CELERY_BEAT_SCHEDULER = 'django_celery_beat.schedulers:DatabaseScheduler'
+
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+
+# Celery Beat Schedule
+CELERY_BEAT_SCHEDULE = {
+    'check-reminders-every-minute': {
+        'task': 'RemindHer_app.tasks.check_reminders',
+        'schedule': 60.0,
+    },
+    'check-inventory-daily': {
+        'task': 'RemindHer_app.tasks.check_inventory_alerts',
+        'schedule': 86400.0,
+    },
+}
 
 
 MIDDLEWARE = [
@@ -157,4 +173,6 @@ app.autodiscover_tasks()
 
 CSRF_COOKIE_SECURE = False  # For local testing
 CSRF_COOKIE_HTTPONLY = False
+
+
 

@@ -1,0 +1,122 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}Dashboard - RemindHer{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block page_subtitle %}Your personal assistant at a glance{% endblock %}
+
+{% block content %}
+<div class="dashboard-grid">
+    <!-- Reminders Card -->
+    <a href="{% url 'view_reminders' %}" class="stat-card">
+        <div class="stat-icon reminders">🔔</div>
+        <div class="stat-info">
+            <h3>{{ reminders_count }}</h3>
+            <p>Active Reminders</p>
+        </div>
+    </a>
+    
+    <!-- Inventory Card -->
+    <a href="{% url 'inventory' %}" class="stat-card">
+        <div class="stat-icon inventory">📦</div>
+        <div class="stat-info">
+            <h3>{{ inventory_count }}</h3>
+            <p>Inventory Items</p>
+        </div>
+    </a>
+    
+    <!-- Expiring Soon Card -->
+    <a href="{% url 'inventory' %}?filter=expiring" class="stat-card">
+        <div class="stat-icon" style="background: rgba(239, 68, 68, 0.15);">⚠️</div>
+        <div class="stat-info">
+            <h3>{{ expiring_count }}</h3>
+            <p>Expiring Soon</p>
+        </div>
+    </a>
+    
+    <!-- Recipes Card -->
+    <a href="{% url 'recipes' %}" class="stat-card">
+        <div class="stat-icon recipes">🍳</div>
+        <div class="stat-info">
+            <h3>Browse</h3>
+            <p>Recipes</p>
+        </div>
+    </a>
+</div>
+
+<!-- Quick Actions -->
+<div class="grid-2 mt-4">
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Quick Actions</h3>
+        </div>
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+            <a href="{% url 'create_reminder' %}" class="btn btn-primary">
+                <span>➕</span>
+                Create New Reminder
+            </a>
+            <a href="{% url 'voice_assistant' %}" class="btn btn-secondary">
+                <span>🎤</span>
+                Open Voice Assistant
+            </a>
+            <a href="{% url 'inventory' %}" class="btn btn-secondary">
+                <span>📦</span>
+                Manage Inventory
+            </a>
+            <a href="{% url 'grocery_list' %}" class="btn btn-secondary">
+                <span>🛒</span>
+                View Grocery List
+            </a>
+        </div>
+    </div>
+    
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Recent Reminders</h3>
+            <a href="{% url 'view_reminders' %}" class="btn btn-sm btn-secondary">View All</a>
+        </div>
+        
+        {% if recent_reminders %}
+        <div style="display: flex; flex-direction: column; gap: 12px;">
+            {% for reminder in recent_reminders %}
+            <div class="list-item">
+                <div class="list-item-content">
+                    <div class="list-item-icon">🔔</div>
+                    <div class="list-item-info">
+                        <h4>{{ reminder.task }}</h4>
+                        <p>{{ reminder.reminder_date }} at {{ reminder.reminder_time }}</p>
+                    </div>
+                </div>
+                <span class="badge {% if reminder.is_completed %}badge-success{% else %}badge-warning{% endif %}">
+                    {{ reminder.get_reminder_type_display }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="empty-state" style="padding: 30px;">
+            <p>No reminders yet. Create your first reminder!</p>
+            <a href="{% url 'create_reminder' %}" class="btn btn-primary btn-sm">Create Reminder</a>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<!-- Voice Assistant Demo -->
+<div class="card mt-4">
+    <div class="card-header">
+        <h3 class="card-title">🎤 Try Voice Commands</h3>
+    </div>
+    <p style="color: var(--text-secondary); margin-bottom: 16px;">
+        Click the microphone button or say these commands:
+    </p>
+    <div class="chip-grid">
+        <button class="chip" onclick="quickCommand('Set a reminder for tomorrow at 9am')">Set a reminder</button>
+        <button class="chip" onclick="quickCommand('What can I cook today?')">What can I cook?</button>
+        <button class="chip" onclick="quickCommand('Show my grocery list')">Grocery list</button>
+        <button class="chip" onclick="quickCommand('What is expiring soon?')">Expiring soon?</button>
+        <button class="chip" onclick="quickCommand('Open inventory')">Open inventory</button>
+        <button class="chip" onclick="quickCommand('What time is it?')">What time is it?</button>
+    </div>
+</div>
+{% endblock %}

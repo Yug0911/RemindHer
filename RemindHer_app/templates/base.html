@@ -1,67 +1,121 @@
+{% load static %}
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>{% block title %}{% endblock %}</title>
-    <script>
-        function checkReminders() {
-            fetch('/check_reminders/', {
-                method: 'GET',
-                headers: {'X-CSRFToken': '{{ csrf_token }}'}
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.reminder) {
-                    showPopup(data.reminder);
-                }
-            });
-        }
-
-        function showPopup(reminder) {
-            const popup = document.createElement('div');
-            popup.style.position = 'fixed';
-            popup.style.top = '50%';
-            popup.style.left = '50%';
-            popup.style.transform = 'translate(-50%, -50%)';
-            popup.style.background = '#fff';
-            popup.style.padding = '20px';
-            popup.style.border = '1px solid #000';
-            popup.innerHTML = `
-                <h2>Reminder: ${reminder.task}</h2>
-                <button onclick="snooze(${reminder.id}, 5)">Snooze 5 min</button>
-                <button onclick="snooze(${reminder.id}, 10)">Snooze 10 min</button>
-                <button onclick="cancel(${reminder.id})">Cancel</button>
-            `;
-            document.body.appendChild(popup);
-        }
-
-        function snooze(reminderId, minutes) {
-            fetch(`/snooze/${reminderId}/${minutes}/`, {
-                method: 'POST',
-                headers: {'X-CSRFToken': '{{ csrf_token }}'}
-            })
-            .then(response => response.json())
-            .then(data => {
-                alert(data.message);
-                document.querySelector('div').remove();
-            });
-        }
-
-        function cancel(reminderId) {
-            fetch(`/cancel/${reminderId}/`, {
-                method: 'POST',
-                headers: {'X-CSRFToken': '{{ csrf_token }}'}
-            })
-            .then(response => response.json())
-            .then(data => {
-                alert(data.message);
-                document.querySelector('div').remove();
-            });
-        }
-
-        setInterval(checkReminders, 60000);  // Check every minute
-    </script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}RemindHer{% endblock %}</title>
+    <link rel="stylesheet" href="{% static 'css/base.css' %}">
+    {% block extra_css %}{% endblock %}
 </head>
 <body>
-    {% block content %}{% endblock %}
+    {% if request.user.is_authenticated %}
+    <div class="app-container">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-logo">
+                <div class="logo-icon">🔔</div>
+                <span class="logo-text">RemindHer</span>
+            </div>
+            
+            <ul class="sidebar-nav">
+                <li>
+                    <a href="{% url 'dashboard' %}" class="{% if request.path == '/' %}active{% endif %}">
+                        <span class="nav-icon">🏠</span>
+                        <span>Dashboard</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'create_reminder' %}" class="{% if 'create-reminder' in request.path %}active{% endif %}">
+                        <span class="nav-icon">🔔</span>
+                        <span>Create Reminder</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'view_reminders' %}" class="{% if 'view_reminders' in request.path %}active{% endif %}">
+                        <span class="nav-icon">📋</span>
+                        <span>View Reminders</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'voice_assistant' %}" class="{% if 'voice' in request.path %}active{% endif %}">
+                        <span class="nav-icon">🎤</span>
+                        <span>Voice Assistant</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'inventory' %}" class="{% if 'inventory' in request.path %}active{% endif %}">
+                        <span class="nav-icon">📦</span>
+                        <span>Inventory</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'recipes' %}" class="{% if 'recipes' in request.path %}active{% endif %}">
+                        <span class="nav-icon">🍳</span>
+                        <span>Recipes</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'recipe_suggestions' %}" class="{% if 'suggest' in request.path %}active{% endif %}">
+                        <span class="nav-icon">💡</span>
+                        <span>Suggestions</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'grocery_list' %}" class="{% if 'grocery' in request.path %}active{% endif %}">
+                        <span class="nav-icon">🛒</span>
+                        <span>Grocery List</span>
+                    </a>
+                </li>
+                <li>
+                    <a href="{% url 'preferences' %}" class="{% if 'preferences' in request.path %}active{% endif %}">
+                        <span class="nav-icon">⚙️</span>
+                        <span>Settings</span>
+                    </a>
+                </li>
+            </ul>
+            
+            <div style="margin-top: auto; padding-top: 20px; border-top: 1px solid var(--border);">
+                <a href="{% url 'logout' %}" class="btn btn-secondary" style="width: 100%; justify-content: center;">
+                    <span>🚪</span>
+                    <span>Logout</span>
+                </a>
+            </div>
+        </aside>
+        
+        <!-- Main Content -->
+        <main class="main-content">
+            <div class="topbar">
+                <div class="topbar-left">
+                    <h1>{% block page_title %}Dashboard{% endblock %}</h1>
+                    <p>{% block page_subtitle %}Welcome back!{% endblock %}</p>
+                </div>
+                <div class="topbar-right">
+                    <div class="user-greeting">
+                        <div class="name">{{ request.user.name|default:request.user.email }}</div>
+                        <div class="status">Active</div>
+                    </div>
+                </div>
+            </div>
+            
+            {% block content %}{% endblock %}
+        </main>
+        
+        <!-- Floating Voice Button -->
+        <div class="fab-voice">
+            <div class="fab-transcript" id="fab-transcript"></div>
+            <button class="fab-btn" id="voice-btn" title="Voice Assistant">
+                🎤
+            </button>
+        </div>
+    </div>
+    {% else %}
+    <!-- Auth Pages Layout -->
+    {% block auth_content %}{% endblock %}
+    {% endif %}
+    
+    <!-- Voice JS -->
+    <script src="{% static 'js/voice.js' %}"></script>
+    {% block extra_js %}{% endblock %}
 </body>
 </html>

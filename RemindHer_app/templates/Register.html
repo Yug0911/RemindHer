@@ -1,71 +1,43 @@
+{% extends 'base.html' %}
 {% load static %}
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Sign Up - RemindHer</title>
-    <link rel="stylesheet" href="{% static 'css/Register.css' %}">
-</head>
-<body>
-    <div class="container">
-        <div class="auth-box">
-            <div class="header">
-                <h1>Register</h1>
-                <p>Create Your Account Today</p>
-            </div>
 
-            <form action="{% url 'api-register' %}" method="POST">
-                {% csrf_token %}
-                <div class="form-group">
-                    <label for="name">Full Name</label>
-                    <input type="text" id="name" name="name" required>
-                </div>
+{% block title %}Register - RemindHer{% endblock %}
 
-                <div class="form-group">
-                    <label for="email">Email</label>
-                    <input type="email" id="email" name="email" required>
-                </div>
-
-                <div class="form-group">
-                    <label for="password">Password</label>
-                    <input type="password" id="password" name="password" required>
-                </div>
-
-                <div class="form-group">
-                    <label for="confirmPassword">Confirm Password</label>
-                    <input type="password" id="confirmPassword" name="confirmPassword" required>
-                </div>
-
-                <div id="errorMessage" class="error-message"></div>
-
-                <button type="submit" id="submitButton" class="primary-button">
-                    Create Account
-                </button>
-            </form>
-
-            <div class="divider">
-                <span>Or continue with</span>
-            </div>
-
-            <div class="social-buttons">
-                <button id="googleSignup" class="social-button">
-                    <img src="{% static 'images\google.jpg' %}" alt="Google">
-                    Google
-                </button>
-                <button id="facebookSignup" class="social-button">
-                    <img src="{% static 'images\facebook.jpg' %}" alt="Facebook">
-                    Facebook
-                </button>
-            </div>
-
-            <p class="switch-auth">
-                Already have an account? 
-                <a href="{% url 'login' %}">Login</a>
-
-            </p>
+{% block auth_content %}
+<div class="auth-container">
+    <div class="auth-card">
+        <div class="auth-header">
+            <div style="font-size: 3rem; margin-bottom: 16px;">🔔</div>
+            <h1>Create Account</h1>
+            <p>Join RemindHer today</p>
         </div>
+        
+        <form method="POST" action="{% url 'register' %}">
+            {% csrf_token %}
+            
+            <div class="form-group">
+                <label class="form-label">Name</label>
+                <input type="text" name="name" class="form-input" placeholder="Enter your name" required>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Email</label>
+                <input type="email" name="email" class="form-input" placeholder="Enter your email" required>
+            </div>
+            
+            <div class="form-group">
+                <label class="form-label">Password</label>
+                <input type="password" name="password" class="form-input" placeholder="Create a password" required>
+            </div>
+            
+            <button type="submit" class="btn btn-primary" style="width: 100%; margin-top: 20px;">
+                Register
+            </button>
+        </form>
+        
+        <p style="text-align: center; margin-top: 20px; color: var(--text-secondary);">
+            Already have an account? <a href="{% url 'login' %}">Login</a>
+        </p>
     </div>
-    <script src="{% static 'js/Register.js' %}"></script>
-</body>
-</html>
+</div>
+{% endblock %}
